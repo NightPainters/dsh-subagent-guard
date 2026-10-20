@@ -1,0 +1,21 @@
+# dsh-subagent-guard bundle patch
+#
+# 注册行：`id` 是身份键（Loader 用它折叠与覆盖，别改），`name` 必须是 npm 包名
+# （它同时是被 import 的模块说明符）。
+- insert:
+    - id: dsh-subagent-guard
+      name: dsh-subagent-guard
+      config:
+        enabled: true
+        # 子代理沙箱硬顶：inherit | read-only | workspace-write | danger-full-access
+        # 父会话的档位是子代理的原始上限；这里再补一层硬顶，只降不升。
+        subagentSandboxCap: workspace-write
+        # all = 父会话与子代理都拦
+        # subagent = 只拦子代理（父会话保留完整执行能力，只锁子代理）
+        denyScope: subagent
+        # 受命令黑名单约束的工具
+        shellTools:
+          - bash
+          - pwsh
+        # denyPatterns 不写就用内置默认值（卷影副本/还原点/分区表/引导/关机重启）。
+        # 自定义时是**整体替换**，别只写新增的那条。

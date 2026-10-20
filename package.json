@@ -1,0 +1,63 @@
+{
+  "name": "dsh-subagent-guard",
+  "version": "0.1.0",
+  "description": "Sandbox ceiling and destructive-command denylist for DeepSeek Harness subagents",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "subagent",
+    "sandbox",
+    "security",
+    "guard",
+    "permission"
+  ],
+  "license": "MIT",
+  "author": "NightPainters",
+  "type": "module",
+  "main": "./lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "./lib/index.js",
+    "./lib/rules.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NightPainters/dsh-subagent-guard.git"
+  },
+  "homepage": "https://github.com/NightPainters/dsh-subagent-guard#readme",
+  "bugs": {
+    "url": "https://github.com/NightPainters/dsh-subagent-guard/issues"
+  },
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.4"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
+  },
+  "scripts": {
+    "test": "node tests/guard.test.mjs && node tests/apply.test.mjs",
+    "test:rules": "node tests/guard.test.mjs",
+    "test:apply": "node tests/apply.test.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
