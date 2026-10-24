@@ -9,6 +9,7 @@ import {
   commandOf,
   compileRules,
   matchCommand,
+  scriptPathOf,
   shouldCapSandbox,
   skipByScope,
 } from '../lib/rules.js'
@@ -62,6 +63,14 @@ test('不误伤日常命令', () => {
   }
 })
 
+test('默认黑名单拦住不可恢复的数据擦除', () => {
+  // 2026-10-24 外部审计建议：按"不可恢复"这同一把尺子补的两条。
+  assert.ok(hit('cipher /w:C'), 'cipher /w 擦除空闲空间')
+  assert.ok(hit('cipher.exe /w:C:\\'), 'cipher.exe 形式')
+  assert.ok(hit('sdelete -p 3 C:\\secret'), 'sdelete 安全删除')
+  assert.equal(hit('cipher /e file.txt'), undefined, '普通加密不该被拦')
+})
+
 test('多行命令里命中任意一行即拒绝', () => {
   const cmd = ['Get-Date', 'Write-Host "backup"', 'vssadmin delete shadows /all /quiet'].join('\n')
   assert.ok(hit(cmd))
@@ -105,4 +114,23 @@ test('非法正则加载期响亮失败', () => {
 
 test('空规则表不拦任何命令', () => {
   assert.equal(matchCommand('vssadmin delete shadows /all /quiet', []), undefined)
+})
+
+test('commandOf 支持自定义参数名（第三方 shell 的参数可能不叫 command）', () => {
+  assert.equal(commandOf({ script: 'whoami' }, 'script'), 'whoami')
+  assert.equal(commandOf({ script: 'whoami' }, 'command'), undefined)
+})
+
+test('scriptPathOf 只从明确的脚本执行形式里抠路径', () => {
+  assert.equal(scriptPathOf('pwsh -File C:\\tmp\\x.ps1'), 'C:\\tmp\\x.ps1')
+  assert.equal(scriptPathOf('pwsh -File "C:\\my dir\\x.ps1"'), 'C:\\my dir\\x.ps1')
+  assert.equal(scriptPathOf('powershell.exe -f .\\run.ps1'), '.\\run.ps1')
+  assert.equal(scriptPathOf('bash ./deploy.sh'), './deploy.sh')
+  assert.equal(scriptPathOf('& "C:\\x\\y.ps1"'), 'C:\\x\\y.ps1')
+
+  // 认不出就不管，交给命令行文本那一层
+  assert.equal(scriptPathOf('Get-Date'), undefined)
+  assert.equal(scriptPathOf('pwsh -c "Get-Date"'), undefined)
+  assert.equal(scriptPathOf('bash -c whoami'), undefined, '`-c` 不是脚本文件')
+  assert.equal(scriptPathOf('echo vssadmin delete shadows'), undefined)
 })

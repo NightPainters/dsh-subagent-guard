@@ -6,7 +6,11 @@
  * 跑法：node tests/apply.test.mjs
  */
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
+
 import { apply, depthOf, name, inject, Config } from '../lib/index.js'
 
 /** 造一个最小可用的假 ctx。 */
@@ -19,6 +23,7 @@ function makeCtx({ override, defaultMode = 'danger-full-access' } = {}) {
     logger: () => ({
       info: (m) => logs.push(['info', m]),
       warn: (m) => logs.push(['warn', m]),
+      error: (m) => logs.push(['error', m]),
     }),
     on: (event, fn) => {
       listeners[event] = fn
@@ -52,12 +57,20 @@ function makeAgent(depth, sessionId = `s-${depth}`) {
   return { agent: { options: {}, session, sessionId }, appended }
 }
 
+/**
+ * 测试用的完整配置。
+ * 注意：这里必须把 Config 的每个字段都写全——`apply` 收到的是宿主已经用
+ * Schemastery 填充过默认值的对象，裸 config 缺字段会让校验提前抛错。
+ */
 const baseConfig = {
   enabled: true,
   subagentSandboxCap: 'workspace-write',
-  shellTools: ['bash', 'pwsh'],
+  commandArg: 'command',
+  shellTools: ['bash', 'pwsh', 'win_bash'],
   denyPatterns: [],
   denyScope: 'all',
+  scriptInspection: true,
+  maxScriptBytes: 262144,
 }
 
 test('导出的契约形状正确', () => {
@@ -65,6 +78,14 @@ test('导出的契约形状正确', () => {
   assert.deepEqual(inject, ['tools', 'sandboxPolicy'])
   assert.equal(typeof Config, 'function', 'Config 必须是 Schemastery schema')
   assert.equal(typeof apply, 'function')
+})
+
+test('默认值对齐：schema 与 bundle patch 的 denyScope 都是 subagent', () => {
+  // 审计缺口 4：两处默认值不一致会让"装完比文档更松"。
+  const resolved = Config({})
+  assert.equal(resolved.denyScope, 'subagent')
+  assert.equal(resolved.subagentSandboxCap, 'workspace-write')
+  assert.equal(resolved.scriptInspection, true)
 })
 
 test('闸一：danger-full-access 的子代理被压到 workspace-write', () => {
@@ -103,7 +124,8 @@ test('闸一：cap=inherit 完全不干预', () => {
   assert.deepEqual(appended, [])
 })
 
-test('闸一：读取档位抛错时 fail-open 跳过，不炸宿主', () => {
+test('闸一：读取档位抛错时 fail-closed，补压到 read-only', () => {
+  // 审计缺口 3：原实现 warn 一句就放行。现在必须压到最严档。
   const { ctx, listeners, logs } = makeCtx()
   ctx.sandboxPolicy.overrideOf = () => {
     throw new Error('boom')
@@ -111,8 +133,25 @@ test('闸一：读取档位抛错时 fail-open 跳过，不炸宿主', () => {
   apply(ctx, { ...baseConfig })
   const { agent, appended } = makeAgent(1)
   assert.doesNotThrow(() => listeners['agent/created']({ agent }))
-  assert.deepEqual(appended, [])
-  assert.ok(logs.some(([, m]) => m.includes('跳过封顶')))
+  assert.deepEqual(appended, [['sandbox/mode', { mode: 'read-only' }]], '读不到档位必须压到 read-only')
+  assert.ok(logs.some(([lvl]) => lvl === 'error'), '必须以 error 级别留痕')
+})
+
+test('闸一：写入档位抛错时用 error 留痕，不炸宿主', () => {
+  const { ctx, listeners, logs } = makeCtx({ defaultMode: 'danger-full-access' })
+  apply(ctx, { ...baseConfig })
+  const agent = {
+    options: {},
+    sessionId: 's-broken',
+    session: {
+      header: { delegationDepth: 1 },
+      append: () => {
+        throw new Error('append failed')
+      },
+    },
+  }
+  assert.doesNotThrow(() => listeners['agent/created']({ agent }))
+  assert.ok(logs.some(([lvl, m]) => lvl === 'error' && m.includes('封顶失败')))
 })
 
 test('闸二：guard 真的被注册，且按整串命令拒绝', () => {
@@ -134,11 +173,30 @@ test('闸二：安全命令放行', () => {
   assert.equal(guards[0]({ name: 'pwsh', arguments: { command: 'Get-Date' }, agent }), undefined)
 })
 
-test('闸二：非 shell 工具不受约束', () => {
+test('闸二：参数形状驱动——第三方 shell 不在名单也照样拦', () => {
+  // 审计缺口 1：`win_bash` 这类第三方 shell 工具名不在白名单里就会被整类放行。
+  const { ctx, guards, logs } = makeCtx()
+  apply(ctx, { ...baseConfig, shellTools: ['bash', 'pwsh'], denyPatterns: ['\\bvssadmin\\b'] })
+
+  const { agent } = makeAgent(1)
+  const reason = guards[0]({
+    name: 'some_third_party_shell',
+    arguments: { command: 'vssadmin delete shadows' },
+    agent,
+  })
+  assert.equal(typeof reason, 'string', '只要参数里有 command，就必须被检查')
+  assert.ok(logs.some(([, m]) => m.includes('自动纳入命令类工具')), '必须留一条可见的告警')
+})
+
+test('闸二：不带命令参数的工具不受约束', () => {
   const { ctx, guards } = makeCtx()
   apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
   const { agent } = makeAgent(1)
-  assert.equal(guards[0]({ name: 'read', arguments: { command: 'vssadmin delete shadows' }, agent }), undefined)
+  assert.equal(
+    guards[0]({ name: 'read', arguments: { file_path: 'C:\\x.txt' }, agent }),
+    undefined,
+    '没有 command 参数的工具不该被拦',
+  )
 })
 
 test('闸二：denyScope=subagent 时顶层放行、子代理照拒', () => {
@@ -170,11 +228,75 @@ test('闸二：enabled=false 时两道闸都不生效', () => {
   assert.equal(guards[0]({ name: 'pwsh', arguments: { command: 'vssadmin delete shadows' }, agent }), undefined)
 })
 
+test('闸二：脚本旁路——-File 指向含危险命令的脚本被拒', () => {
+  // 审计缺口 2：`pwsh -File x.ps1` 的命令行里看不到脚本内容。
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'evil.ps1')
+    writeFileSync(script, 'Write-Output "start"\nvssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `pwsh -File "${script}"` },
+      agent,
+      cwd: dir,
+    })
+    assert.equal(typeof reason, 'string', '脚本内容命中规则时必须拒绝')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('闸二：脚本旁路——干净的脚本放行', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'ok.ps1')
+    writeFileSync(script, 'Get-Date\nGet-ChildItem\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    assert.equal(
+      guards[0]({ name: 'pwsh', arguments: { command: `pwsh -File "${script}"` }, agent, cwd: dir }),
+      undefined,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('闸二：脚本旁路可关闭', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'evil.ps1')
+    writeFileSync(script, 'vssadmin delete shadows /all\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, scriptInspection: false, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    assert.equal(
+      guards[0]({ name: 'pwsh', arguments: { command: `pwsh -File "${script}"` }, agent, cwd: dir }),
+      undefined,
+      'scriptInspection=false 时只查命令行文本',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('加载期校验：未知档位 / 未知作用域 / 非法正则都响亮失败', () => {
   const { ctx } = makeCtx()
   assert.throws(() => apply(ctx, { ...baseConfig, subagentSandboxCap: 'root' }), /subagentSandboxCap/)
   assert.throws(() => apply(ctx, { ...baseConfig, denyScope: 'everything' }), /denyScope/)
   assert.throws(() => apply(ctx, { ...baseConfig, denyPatterns: ['vssadmin('] }), /非法的 denyPatterns 正则/)
+  assert.throws(() => apply(ctx, { ...baseConfig, maxScriptBytes: 0 }), /maxScriptBytes/)
 })
 
 test('depthOf 在判不清时 fail-closed 当作子代理', () => {

@@ -13,9 +13,15 @@
         # all = 父会话与子代理都拦
         # subagent = 只拦子代理（父会话保留完整执行能力，只锁子代理）
         denyScope: subagent
-        # 受命令黑名单约束的工具
+        # 携带命令文本的参数名。闸二按**参数形状**识别命令类工具：任何工具的
+        # 参数里有这个字段就会被检查，与它叫什么名字无关（第三方 shell 自动覆盖）。
+        commandArg: command
+        # 额外纳入的工具名（不是全集，只补参数名不叫 command 的特殊 shell）。
         shellTools:
           - bash
           - pwsh
+          - win_bash
+        # 对 `pwsh -File x.ps1` 这类间接执行，读取脚本内容再匹配一遍同一套规则。
+        scriptInspection: true
         # denyPatterns 不写就用内置默认值（卷影副本/还原点/分区表/引导/关机重启）。
         # 自定义时是**整体替换**，别只写新增的那条。
