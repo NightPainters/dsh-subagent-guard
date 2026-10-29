@@ -4,6 +4,21 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] — 2026-10-29
+
+**0.4.1 shipped two misreports of its own. Both surfaced by running it on the real host
+minutes after the restart — not by the test suite, which was green throughout.**
+
+### Fixed
+- **"Not narrowed" was never actually displayed.** 0.4.1 only said so when `tools` was
+  `undefined`, but with `enforceMaxTools: true` an omitted `tools` resolves to `[...cap]` — a
+  real array — so that branch was unreachable in the deployment. The result now carries
+  `toolsSource` (`inherit` | `cap-default` | `requested`), and only `cap-default` renders
+  `未收窄 —— 子代理获得了全部 N 个白名单工具`.
+- **`personaApplied` reported `已设置` for every delegation.** 0.4.1 decoupled the scope
+  section from `persona`, so `sectionText` became almost always defined and the flag — derived
+  from it — lost all meaning. It now reflects whether the caller actually passed a `persona`.
+
 ## [0.4.1] — 2026-10-29
 
 **Four ways a delegation could misrepresent its own scope — all found by running it and reading

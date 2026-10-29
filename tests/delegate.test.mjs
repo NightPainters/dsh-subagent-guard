@@ -212,7 +212,7 @@ test('output.schema 与 parameters 都不使用属性级 required（宿主会拒
       )
     }
   }
-  assert.deepEqual(tool.output.schema.required.sort(), ['kind', 'personaApplied', 'subagentId'])
+  assert.deepEqual(tool.output.schema.required.sort(), ['kind', 'personaApplied', 'subagentId', 'toolsSource'])
 })
 
 // ---- 策略真的落地 ----------------------------------------------------------
