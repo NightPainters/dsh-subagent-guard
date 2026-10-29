@@ -222,6 +222,18 @@ size limit) throws at load time rather than failing silently.
 - **Gate 3 needs the `subagents` service.** If it never appears, `delegate` is not
   registered and gates 1 and 2 keep working. That degradation is logged once, but from the
   model's point of view gate 3 is simply gone.
+- **Cold resume re-expands the tool surface.** `restrict()` and any guard registered on the
+  child's own `agent.ctx` do not survive `agents.resume()`: an idle child woken by
+  `send_message` comes back with roughly the full inherited surface — observed on a child
+  delegated `read` alone, which reported 91 tools afterwards and successfully spawned a
+  grandchild. Visibility cannot be removed (`dsh-tools` exposes no way to unregister a
+  scoped tool), so the plugin pins each granted surface in a side table and registers a
+  fallback guard on **its own** context, which is not torn down with the child. The
+  practical consequence: after a cold resume the tools are still *listed* to the model and
+  are refused only at call time. Verified — a woken child calling `subagent` gets
+  `工具 "subagent" 不在该子代理的授权工具面内（delegate 策略，冷恢复兜底）` and creates no
+  grandchild. **If you plan to talk to a narrowed child over multiple turns, give it the
+  full surface up front** rather than relying on the narrowing to hold across resume.
 - **An unknown sandbox mode is treated as the widest** and capped to `read-only` with a
   warning. A host that introduces a new mode is a migration event for this plugin: gate 1
   would otherwise treat it as "already narrow" and leave it alone.
