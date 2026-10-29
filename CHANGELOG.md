@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.8] — 2026-10-29
+
+**Security fix: the cold-resume fallback never matched anything, so every narrowed child
+regained its full tool surface after `send_message`.** Both the binding and the fallback
+read `agent.sessionId` — a property that does not exist on `Agent` (its keys are
+`loopCtx, id, options, session, inbox, phase, activityDone, scope, ctx, dispatch, …`;
+the session id lives at `agent.session.id`). The binding therefore stored the policy
+under the literal string key `"undefined"`, and the fallback looked up a real session id
+that could never be there. The scoped layer (which closes over `allowed` directly) kept
+working, so the first turn of every child was correctly narrowed — which is exactly why
+this looked fixed.
+
+Measured on the testbed (`0.2.1-rc.2`, headless): a child delegated with `tools=['read']`
+was asked, after cold resume, to run `Set-Content … PWNED`. It succeeded and the file
+appeared on disk. With the key fixed, the same probe is refused with
+`工具 "pwsh" 不在该子代理的授权工具面内（delegate 策略，冷恢复兜底）；可用工具：list_subagent_models, read`
+and no file is created.
+
+Root cause of the blind spot: the 0.3.6 test faked the agent as `{ sessionId: 'x' }`,
+mirroring the wrong property name, so the suite agreed with the bug.
+
+### Fixed
+- A single `sidOf()` helper resolves a session id from `agent.session.id`, then `agent.id`
+  (plus a legacy `agent.sessionId` fallback for hand-built probe objects). Every site that
+  used `.sessionId` now goes through it: the fallback lookup, the `pinned` binding, the
+  fail-closed cancel target, and the parent-side pending key.
+- The cold-resume regression test now reads the id through the same helper the runtime
+  does, so a wrong key fails the suite instead of passing it.
+
 ## [0.3.7] — 2026-10-29
 
 **Crash fix: a malformed cancellation cause killed the host process.** The fail-closed
