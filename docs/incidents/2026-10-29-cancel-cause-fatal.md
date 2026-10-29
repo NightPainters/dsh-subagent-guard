@@ -162,6 +162,41 @@ if (cause === null || typeof cause !== "object") return { kind: "disposed" };
 
 两处均为防未来第三方插件/调用方再传非法 cause，属于纵深防御。
 
+### 第三处补丁（2026-10-29 晚追加）
+
+复盘时扫 `dsh-subagent` 全仓的 `reason.kind` 引用，发现第三处同族隐患，不在上表：
+
+`dsh-subagent/lib/index.js:226`（`epochStopReason`）：
+
+```diff
+- switch (end?.data.reason.kind) {
++ switch (end == null ? void 0 : (end.data?.reason?.kind ?? null)) {
+```
+
+原写法只对 `end` 用了可选链，`data` 与 `reason` 都没有防护。只要再产生一条
+`reason: null` 的脏帧，`epochStopReason` 同样会抛 `TypeError` —— 它和 `:2668`
+是同一个根因的两个爆点，只是 `:2668` 先被踩到。
+
+**为什么不简单写成 `end?.data?.reason?.kind`**：那样 `reason: null` 会得到
+`undefined`，命中 `case void 0` 被判成 `completed` —— 把损坏帧报成成功。改成
+`?? null` 后落进 `default: return "error"`，与本函数注释里"不可名的原因不能读成
+成功"的既有立场一致。
+
+验证（`_tmp/probe-reason.mjs`）：改后模块可 import（25 个导出），七种帧形状全部
+不抛错，且语义正确 ——
+
+| 输入 | 结果 |
+|---|---|
+| 无 `turn/end` | `completed` |
+| `end` 存在、`reason: null`（本次崩溃形状） | **`error`** |
+| `end` 存在、`data` 为 null | `error` |
+| `reason.kind = "completed"` | `completed` |
+| `reason.kind = "max-tokens"` | `max-tokens` |
+| `reason.kind = "weird"` | `error` |
+| 无 `end` + 有未跑完的工作 | `aborted` |
+
+原件备份：`_cw_recon\patch_backup_20261029\dsh-subagent__index.js.before-line226`
+
 ### 数据修复
 
 将中毒帧的 `"reason":null` 替换为 `"reason":{"kind":"disposed"}`，仅重压该单帧、

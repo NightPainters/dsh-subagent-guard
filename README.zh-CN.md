@@ -181,6 +181,25 @@ dsh plugin add dsh-subagent-guard
 非法配置（未知档位、未知作用域、编译不过的正则、非正的体积上限）在**加载期抛错**，
 不会静默失效。
 
+## 版本警告
+
+**`0.3.6` 及更早版本有可能把整个宿主进程一起带走。**
+
+它们在 `delegate` 的 fail-closed 路径上用裸字符串
+（`target.cancel('delegation-policy-unbound')`）取消子代理，而不是一个完整的
+`AgentCancelCause`。这个坏值会被写成会话日志里的 `turn/end { reason: null }`；下次
+回放该会话时，代码在 `null` 上读 `reason.kind` 抛错，导致**整个** DSH 进程 fatal
+——同一个 Job Object 里的兄弟进程全部陪葬，死的不是一个子代理。
+
+触发条件很窄：`delegate` 调用的工具绑定失败（例如工具名不在你配置的 `maxTools`
+里），然后重启、让会话被回放。日常委派走不到这条路径。
+
+**`0.3.7` 修掉了这个成因。** 在你真正在意的宿主上启用闸三之前，请先升级。
+完整复盘：[`docs/incidents/2026-10-29-cancel-cause-fatal.md`](docs/incidents/2026-10-29-cancel-cause-fatal.md)。
+
+暂时无法升级的话，保持 `enforceMaxTools: false` 且不要给 `delegate` 传 `tools`
+——绑定就不会失败，那条路径也就进不去。
+
 ## 已知边界
 
 - **文本匹配，不是系统调用沙箱。** `run_code`、`node -e`、内联求值（`pwsh -c "…"`）、

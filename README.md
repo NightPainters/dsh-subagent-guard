@@ -195,6 +195,27 @@ documented default and the deployed one is visible instead of silent.
 Invalid configuration (unknown mode, unknown scope, uncompilable regex, non-positive
 size limit) throws at load time rather than failing silently.
 
+## Version warning
+
+**Versions `0.3.6` and earlier can take the whole host process down with them.**
+
+Their fail-closed path in `delegate` cancelled the child with a bare string
+(`target.cancel('delegation-policy-unbound')`) instead of a well-formed
+`AgentCancelCause`. The bad value propagated into `turn/end { reason: null }` in the
+session log; replaying that session then read `reason.kind` on `null` and threw, which
+made the *entire* DSH process fatal — every sibling process in the same Job Object
+died with it, not just the subagent.
+
+The trigger is narrow: a `delegate` call whose tool binding fails (for example tool
+names not in your configured `maxTools`), followed by a restart that replays the
+session. It is not reachable from ordinary delegation.
+
+**`0.3.7` fixes the cause.** Upgrade before enabling gate 3 on a host you care about.
+Full write-up: [`docs/incidents/2026-10-29-cancel-cause-fatal.md`](docs/incidents/2026-10-29-cancel-cause-fatal.md).
+
+If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
+`delegate` — the binding then cannot fail, so that path is never entered.
+
 ## Known limits
 
 - **Text matching, not a syscall sandbox.** `run_code`, `node -e`, inline evaluation
