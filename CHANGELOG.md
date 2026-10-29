@@ -4,6 +4,38 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.7] — 2026-10-29
+
+**Crash fix: a malformed cancellation cause killed the host process.** The fail-closed
+branch cancelled an unbound child with a bare string instead of an `AgentCancelCause`
+object. That string reached `AbortController.abort()`, so `signal.reason` was not an
+object; DSH's `abortedCancelCause` threw from *inside* `turn()`'s catch block, leaving
+`turnEnds` at its `null` initial value, and the `finally` persisted
+`turn/end { reason: null }`. Every later load of that subagent session then crashed the
+whole process in the subagent projection:
+`TypeError: Cannot read properties of null (reading 'kind')`.
+
+Found on the real machine, once again by a probe rather than by the suite: the tests
+verified that a policy-unbound child is cancelled and that the delegation fails, but
+never asserted what the cancellation writes into the session log.
+
+### Fixed
+
+- The fail-closed cancellation now passes `{ kind: 'disposed' }`. `disposed` is the
+  accurate cause for a child torn down because its policy never bound, and it keeps the
+  loop's `?.kind !== 'disposed'` wake judgement correct. Verified by a regression test
+  that fails on the string form.
+- Two defensive patches accompany it (applied by hand, they live in `node_modules`):
+  `dsh-agent-loop`'s `abortedCancelCause` returns `{ kind: 'disposed' }` for a non-object
+  reason instead of reaching `assertNever`, and `dsh-subagent`'s `turn/end` projection
+  reads `event.data?.reason?.kind`. A DSH upgrade overwrites both.
+
+### Also
+
+- Incident write-up: `docs/incidents/2026-10-29-cancel-cause-fatal.md` — the full
+  three-layer chain, the on-disk evidence (one poisoned 1703-byte frame out of 981
+  session logs), and the recovery steps.
+
 ## [0.3.6] — 2026-10-29
 
 **Security fix: the delegate gate did not survive a resumed child.** Found by a probe

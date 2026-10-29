@@ -266,7 +266,21 @@ test('子代理没消费到策略 ⇒ 取消它并抛错', async () => {
     /fail-closed/,
   )
   assert.equal(h.calls.cancelled.length, 1)
-  assert.equal(h.calls.cancelled[0].cause, 'delegation-policy-unbound')
+  // 契约：cancel(cause) 只接受 AgentCancelCause 对象（{kind: user|parent|disposed|hook}）。
+  // 2026-10-29 事故：这里曾传裸字符串 'delegation-policy-unbound'，abort reason 遂不是对象，
+  // DSH 的 abortedCancelCause 在 turn() 的 catch 内抛错，使 turnEnds 停在 null，
+  // finally 写出 turn/end{reason:null}，此后每次加载该会话都在投影层 fatal。
+  // 见 docs/incidents/2026-10-29-cancel-cause-fatal.md
+  const cause = h.calls.cancelled[0].cause
+  assert.ok(
+    cause !== null && typeof cause === 'object',
+    `cancel 必须收到 cause 对象，实际收到：${typeof cause} ${String(cause)}`,
+  )
+  assert.deepEqual(cause, { kind: 'disposed' })
+  assert.ok(
+    ['user', 'parent', 'disposed', 'hook'].includes(cause.kind),
+    `cause.kind 超出 AgentCancelCause 联合：${String(cause.kind)}`,
+  )
 })
 
 test('restrict 抛错 ⇒ 认领被判失败 ⇒ 取消子代理', async () => {

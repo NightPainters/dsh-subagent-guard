@@ -6,3 +6,6 @@ Thumbs.db
 # local scratch
 _tmp/
 *.tmp
+
+# scratch
+_commitmsg.txt
