@@ -4,6 +4,30 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.9] — 2026-10-29
+
+**Availability fix: `delegate` failed closed on every call in the live deployment, because
+the two ends of the binding used different id sources.** Registration keyed the pending
+policy on `agent.session.id`; the child records its `parentSession` from
+`parent.session.header.id` (`dsh-subagent/lib/index.js:354-359`). On a long-lived session
+these differ — measured here, `session.id` pointed at the current file while
+`session.header.id` carried the durable id — so `takePending()` missed every time, the
+policy was never claimed, and each delegation was cancelled before it started.
+
+### Fixed
+- `sidOf()` now reads `agent.session.header.id` first (the exact field the host copies into
+  the child's `parentSession`), then `agent.session.id`, then `agent.id`. Every caller
+  benefits: the pending key, the `pinned` table, the fail-closed cancel target.
+- The fail-closed error now carries a diagnostic trailer — registration key, the child's
+  observed `parentSession`, whether the claim matched, whether the binding ran, and the
+  failure reason. This exists because `ctx.logger` does not reach `logs/` on this machine:
+  once the child is cancelled the scene is gone, and without these values the only thing
+  left to do is guess.
+
+### Why the testbed never caught it
+A fresh session has `session.id === session.header.id`, so both keys agree. The divergence
+only appears on a session resumed across restarts, which is what the live host runs.
+
 ## [0.3.8] — 2026-10-29
 
 **Security fix: the cold-resume fallback never matched anything, so every narrowed child
