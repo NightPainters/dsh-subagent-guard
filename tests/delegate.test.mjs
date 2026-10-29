@@ -44,7 +44,7 @@ function makeHarness(opts = {}) {
   } = opts
   const listeners = new Map()
   const log = []
-  const calls = { restrict: [], sections: [], cancelled: [], guards: [], globalGuards: [] }
+  const calls = { restrict: [], sections: [], cancelled: [], guards: [], globalGuards: [], activations: [] }
   let toolDef
   let createdHandler
   let restrictAttempts = 0
@@ -128,6 +128,7 @@ function makeHarness(opts = {}) {
         return providerExists ? { name } : undefined
       },
       async startActivation(spec) {
+        calls.activations.push(spec)
         if (emitCreated) {
           // 宿主在 startActivation 内部同步派发 agent/created（serial + await）。
           const handlers = listeners.get('agent/created') ?? []
@@ -238,17 +239,26 @@ test('delegate 把 tools 收窄成 restrict，把 persona 注册成 system promp
   assert.equal(h.calls.sections[0].interpolate, false)
 })
 
-test('部署上限收窄模型传来的 tools（模型不能自己放宽）', async () => {
+test('模型请求在白名单内 ⇒ 原样施加', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'grep'] }))
-  const value = await callDelegate(h, {
-    description: '审查',
-    prompt: 'x',
-    tools: ['read', 'grep', 'pwsh', 'write'],
-  })
+  const value = await callDelegate(h, { description: '审查', prompt: 'x', tools: ['read', 'grep'] })
 
   assert.deepEqual(value.tools, ['read', 'grep'])
   assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }])
+})
+
+test('模型请求超出部署上限 ⇒ 抛错且不创建子代理（不静默裁剪）', async () => {
+  // 2026-10-29 实测的坏行为：静默过滤成空集后仍会创建子代理，
+  // 它只剩 scoped 注册的 subagent/list_subagent_models，却什么都不能做。
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'grep'] }))
+  await assert.rejects(
+    () => callDelegate(h, { description: '审查', prompt: 'x', tools: ['read', 'pwsh'] }),
+    /不在部署上限里/,
+  )
+  assert.deepEqual(h.calls.restrict, [], '抛错时不应施加任何 restrict')
+  assert.equal(h.calls.activations.length, 0, '抛错时不应创建子代理')
 })
 
 test('模型没传 tools + 部署上限为空数组 ⇒ 子代理一个工具都拿不到', async () => {

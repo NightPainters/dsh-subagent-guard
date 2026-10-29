@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-10-29
+
+**Four ways a delegation could misrepresent its own scope — all found by running it and reading
+what the child actually reported, not by reasoning about the code.**
+
+The probe that surfaced them: `delegate(tools: ["this_tool_does_not_exist_12345"])`. The child's
+closing message listed exactly two tools (`list_subagent_models`, `subagent`) and said it had no
+"available tools" statement anywhere in context.
+
+### Fixed
+- **A name outside `maxTools` is an error now, not a silent filter.** The old filter turned a
+  typo into `allow: []`, which emptied the global surface while leaving scoped registrations
+  reachable — the child could do nothing, yet still held a `subagent` tool it was not allowed
+  to call. `delegate` now throws, names the rejected entries, and never creates the child.
+- **The scope section no longer depends on `persona`.** It used to be skipped whenever
+  `persona` was empty, so `delegate(tools: ['read'])` produced a child with no statement of its
+  own limits — it inferred from the function table alone and counted `subagent` as usable. The
+  section is now emitted whenever `allowTools` is set.
+- **The section states which channels are absent.** `subagent` / `subagent_fork` / `delegate`
+  stay visible as scoped registrations, and the host's system prompt names `task_begin` /
+  `task_end` / `task_board_run`, none of which a child can be granted. The section says so
+  instead of leaving the child to guess.
+- **The tool result distinguishes "not narrowed" from "narrowed".** Returning the full cap used
+  to look like a deliberate scope; it now reads
+  `未收窄 —— 子代理获得了全部白名单工具`.
+
+### Unchanged
+- `tools: []` still means exactly zero tools — the only way to ask for an empty scope.
+
 ## [0.4.0] — 2026-10-29
 
 **Availability fix: `tools.restrict()` rejected the whole allow-list whenever it named a

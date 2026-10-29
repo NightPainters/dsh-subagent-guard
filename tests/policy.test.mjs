@@ -47,23 +47,32 @@ test('resolveAllowedTools: 模型指定 + 无上限 ⇒ 原样（去重）', () 
   assert.deepEqual(resolveAllowedTools(['read', 'read', 'grep'], null), ['read', 'grep'])
 })
 
-test('resolveAllowedTools: 模型想超出部署上限 ⇒ 被裁掉（这是本插件的核心保证）', () => {
-  assert.deepEqual(resolveAllowedTools(['read', 'pwsh', 'write'], ['read', 'grep']), ['read'])
+test('resolveAllowedTools: 请求超出部署上限 ⇒ 响亮失败（不再静默裁剪）', () => {
+  // 2026-10-29 实测：静默过滤会把「打错一个字」变成「零工具 + scoped 工具残留」，
+  // 而调用方以为按自己说的配置在跑。宁可抛错也不许静默降级。
+  assert.throws(
+    () => resolveAllowedTools(['read', 'pwsh', 'write'], ['read', 'grep']),
+    /delegate 的 tools 里有 2 个名字不在部署上限里[\s\S]*"pwsh"[\s\S]*"write"/,
+  )
 })
 
-test('resolveAllowedTools: 模型要的全在上限外 ⇒ 空集合', () => {
-  assert.deepEqual(resolveAllowedTools(['pwsh'], ['read']), [])
+test('resolveAllowedTools: 要的全在上限外 ⇒ 响亮失败', () => {
+  assert.throws(() => resolveAllowedTools(['pwsh'], ['read']), /不在部署上限里/)
 })
 
-test('resolveAllowedTools: 上限为空数组 ⇒ 一律空集合', () => {
-  assert.deepEqual(resolveAllowedTools(['read'], []), [])
+test('resolveAllowedTools: 上限为空数组 ⇒ 请求任何名字都失败，但显式 [] 合法', () => {
+  assert.throws(() => resolveAllowedTools(['read'], []), /不在部署上限里/)
+  assert.deepEqual(resolveAllowedTools([], []), [])
 })
 
 // ---- renderSection ---------------------------------------------------------
 
-test('renderSection: 空 persona 不产生段落', () => {
-  assert.equal(renderSection({ persona: '', allowTools: ['read'] }), undefined)
-  assert.equal(renderSection({ persona: '   ', allowTools: ['read'] }), undefined)
+test('renderSection: 空 persona 但有工具面 ⇒ 仍然产生说明段落（与 persona 解耦）', () => {
+  // 2026-10-29 实测：旧实现在 persona 为空时整段不注册，于是
+  // delegate(tools:['read']) 的子代理上下文里没有任何「可用工具」文字。
+  const text = renderSection({ persona: '', allowTools: ['read'] })
+  assert.match(text, /可用工具：read/)
+  assert.match(text, /没有 subagent \/ subagent_fork \/ delegate/)
   assert.equal(renderSection({}), undefined)
 })
 
@@ -93,13 +102,13 @@ test('renderSection: persona 里的 {{...}} 原样保留（不做模板替换）
 
 test('buildPolicy: 全量参数各就各位', () => {
   const policy = buildPolicy(
-    { persona: '你是审查员。', tools: ['read', 'pwsh'], label: '审查' },
-    ['read'],
+    { persona: '你是审查员。', tools: ['read', 'grep'], label: '审查' },
+    ['read', 'grep', 'pwsh'],
   )
-  assert.deepEqual(policy.allowTools, ['read'])
+  assert.deepEqual(policy.allowTools, ['read', 'grep'])
   assert.equal(policy.label, '审查')
   assert.match(policy.sectionText, /你是审查员。/)
-  assert.match(policy.sectionText, /可用工具：read/)
+  assert.match(policy.sectionText, /可用工具：read, grep/)
 })
 
 test('buildPolicy: 只传 prompt 时不施加任何策略', () => {

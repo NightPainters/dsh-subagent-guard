@@ -70,11 +70,12 @@ test('scriptPathOf 识别 -File 与 bash 形式，不误判 -Command', () => {
 })
 
 // ---- 部署上限的交集语义 ----------------------------------------------------
-test('部署上限裁剪模型请求，且 enableMaxTools=false 时不设限', () => {
-  assert.deepEqual(resolveAllowedTools(['read', 'pwsh'], ['read']), ['read'])
+test('部署上限：越界请求响亮失败，enableMaxTools=false 时不设限', () => {
+  assert.throws(() => resolveAllowedTools(['read', 'pwsh'], ['read']), /不在部署上限里/)
   assert.equal(resolveAllowedTools(undefined, null), undefined, '既没请求也没上限 = 继承父面')
   assert.deepEqual(resolveAllowedTools(['read'], null), ['read'], '没上限时原样放行请求值')
-  assert.deepEqual(resolveAllowedTools(['read'], []), [], '空上限 = 一个工具都不给')
+  assert.throws(() => resolveAllowedTools(['read'], []), /不在部署上限里/, '空上限 = 请求什么都失败')
+  assert.deepEqual(resolveAllowedTools([], []), [], '显式空集 = 零工具')
   assert.equal(normalizeCap(false, ['read']), null)
   assert.deepEqual(normalizeCap(true, ['read']), ['read'])
 })
