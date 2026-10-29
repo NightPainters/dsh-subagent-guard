@@ -99,7 +99,8 @@ test('F11 sandboxPolicy 不在 inject 里（缺它不该让整个插件 INACTIVE
     return () => {}
   }
   assert.doesNotThrow(() => apply(ctx, { ...base }))
-  assert.equal(registered, 1, 'sandboxPolicy 缺失时闸二仍然要挂上')
+  // 两条全局 guard：闸二的黑名单 + 冷恢复兜底（后者注册在插件 ctx 上，不依赖任何服务）。
+  assert.equal(registered, 2, 'sandboxPolicy 缺失时闸二与冷恢复兜底仍然要挂上')
 })
 
 // ------------------------------------------------------------------------ F2

@@ -174,7 +174,8 @@ test('闸一：写入档位抛错时用 error 留痕，不炸宿主', () => {
 test('闸二：guard 真的被注册，且按整串命令拒绝', () => {
   const { ctx, guards } = makeCtx()
   apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b[^\\r\\n]*\\bdelete\\b'] })
-  assert.equal(guards.length, 1)
+  // 两条全局 guard：闸二的黑名单 + 冷恢复兜底（后者只认 pinned 里的会话，见 delegate.test.mjs）。
+  assert.equal(guards.length, 2)
 
   const { agent } = makeAgent(1)
   const reason = guards[0]({ name: 'pwsh', arguments: { command: 'vssadmin delete shadows /all' }, agent })

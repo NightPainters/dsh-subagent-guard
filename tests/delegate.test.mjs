@@ -39,7 +39,7 @@ function makeHarness(opts = {}) {
   const { providerExists = true, emitCreated = true, restrictThrows = false } = opts
   const listeners = new Map()
   const log = []
-  const calls = { restrict: [], sections: [], cancelled: [], guards: [] }
+  const calls = { restrict: [], sections: [], cancelled: [], guards: [], globalGuards: [] }
   let toolDef
   let createdHandler
 
@@ -101,8 +101,9 @@ function makeHarness(opts = {}) {
         toolDef = definition
         return () => {}
       },
-      /** 闸二的全局命令 guard（本文件不测它，给个空实现即可）。 */
-      guard() {
+      /** 闸二的全局命令 guard + 冷恢复兜底（本文件只关心后者）。 */
+      guard(fn) {
+        calls.globalGuards.push(fn)
         return () => {}
       },
     },
@@ -347,13 +348,12 @@ test('maxTools 收窄成空集合时 guard 拒绝业务工具，但放行 scoped
   apply(h2.ctx, withDefaults())
   const value = await callDelegate(h2, { description: '无工具', prompt: 'x', tools: [] })
   assert.deepEqual(value.tools, [])
-  // `restrict()` 管不到 scoped 注册（task_begin / task_end / list_subagent_models），
-  // 它们始终可见；guard 跟着放行，免得子代理连任务标记都调不动。
-  assert.match(
-    h2.calls.guards[0]({ name: 'read' }),
-    /可用工具：list_subagent_models, task_begin, task_end/,
-  )
-  assert.equal(h2.calls.guards[0]({ name: 'task_begin' }), undefined)
+  // `restrict()` 管不到 scoped 注册，`list_subagent_models` 始终可见，guard 放行它。
+  // 真机实测（2026-10-29，0.2.1-rc.2）：子代理**没有**注册 `task_begin` / `task_end`，
+  // 所以它们不再豁免 —— 否则拒绝消息会把两个幽灵工具说成"可用"。
+  assert.match(h2.calls.guards[0]({ name: 'read' }), /可用工具：list_subagent_models$/)
+  assert.equal(h2.calls.guards[0]({ name: 'list_subagent_models' }), undefined)
+  assert.match(h2.calls.guards[0]({ name: 'task_begin' }), /不在该子代理的授权工具面内/)
   // 派生通道不受豁免。
   assert.match(h2.calls.guards[0]({ name: 'subagent' }), /不在该子代理的授权工具面内/)
 })
@@ -497,4 +497,42 @@ test('createMutex 按提交顺序执行，且前一个失败不影响后一个',
   assert.equal(await fast, 'ok')
   // 即使 slow 更慢且抛错，fast 也必须排在它后面
   assert.deepEqual(order, ['slow', 'fast'])
+})
+
+// 真机回归（2026-10-29）：`send_message` 唤醒一个 idle 子代理会走 cold resume，
+// 子代理的 ctx 被重建，挂在它上面的 `restrict()` 与 scoped `guard()` 全部消失。
+// 实测后果：一个只被授权 read/glob/grep 的子代理，被唤醒后工具面恢复成全量，
+// 并成功调 `subagent` 派出了孙代理（会话 794cebdb，depth=2，确实存在）。
+// 兜底：插件 ctx 上的全局 guard 按 sessionId 查授权表，冷恢复后依然生效。
+test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦住越权工具', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const value = await callDelegate(h, {
+    description: '只读',
+    prompt: 'x',
+    tools: ['read'],
+  })
+
+  // 闸二的黑名单 guard 也注册在插件 ctx 上，所以按"它是否拦 subagent"来认人，
+  // 不按数组下标 —— 下标会随闸二是否启用、注册顺序变化而漂移。
+  const bail = h.calls.globalGuards.find((fn) => {
+    const verdict = fn({ name: 'subagent', agent: { sessionId: value.subagentId } })
+    return typeof verdict === 'string' && verdict.includes('冷恢复兜底')
+  })
+  assert.ok(bail, '应当注册一条冷恢复兜底的全局 guard')
+
+  // 父会话不在授权表里 ⇒ 完全不受影响。
+  assert.equal(bail({ name: 'pwsh', agent: { sessionId: 'parent-1' } }), undefined)
+  // 没有 sessionId 的调用（后台作业等）也不受影响。
+  assert.equal(bail({ name: 'pwsh', agent: undefined }), undefined)
+  // 授权内的工具冷恢复后仍放行。
+  assert.equal(bail({ name: 'read', agent: { sessionId: value.subagentId } }), undefined)
+  assert.equal(
+    bail({ name: 'list_subagent_models', agent: { sessionId: value.subagentId } }),
+    undefined,
+  )
+  // 越权工具：即使 scoped guard 已经不在了，这一层仍然拒绝。
+  const denied = bail({ name: 'subagent', agent: { sessionId: value.subagentId } })
+  assert.match(denied, /冷恢复兜底/)
+  assert.match(denied, /不在该子代理的授权工具面内/)
 })

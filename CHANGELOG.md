@@ -4,6 +4,77 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.6] — 2026-10-29
+
+**Security fix: the delegate gate did not survive a resumed child.** Found by a probe
+on the real machine, not by the test suite. `restrict()` and the per-child `guard()`
+both live on the child's own context; `send_message` waking an idle child goes through
+cold resume, which rebuilds that context and silently drops both registrations.
+
+Reproduced end to end: a child delegated with `tools: ["read", "glob", "grep"]` reported
+five tools on its first turn, then — after the parent sent it one message — reported
+roughly ninety, and successfully called `subagent` to spawn a grandchild
+(`794cebdb`, `depth=2`, confirmed present in the descendant listing).
+
+### Fixed
+
+- **A plugin-scoped guard now backstops the per-child one.** Each delegated child's
+  authorised tool set is recorded by session id on the plugin context, and a guard
+  registered there refuses anything outside it. That registration lives as long as the
+  plugin, so a rebuilt child context cannot shed it. Verified by a regression test that
+  simulates the child's own guards being gone.
+- The backstop only recognises session ids the plugin itself pinned, so the parent
+  session and ordinary subagents are untouched.
+
+### Known limit
+
+- **Visibility still resets on cold resume.** The child's tool schema returns to the
+  inherited surface; the refused tools are listed but rejected when called. `dsh-tools`
+  exposes no API to remove a scoped registration, so "visible but denied" is the ceiling
+  for this design. It is a `deny`, not a leak.
+
+### Also
+
+- Test-suite runner note for maintainers: the suites report failures with `✖`, not
+  TAP's `not ok`. Grepping for `not ok` silently reports a red suite as green — that is
+  how this bug reached a release candidate.
+
+## [0.3.5] — 2026-10-29
+
+**Two corrections that only a real-machine probe could produce.** 0.3.4 exempted
+`task_begin` / `task_end` from the gate 3 guard on the assumption that a child agent
+registers them. It does not: a probe child that followed the runtime's own lifecycle
+nudge called `task_begin({name})` and got `Error: unknown tool "task_begin"`. The
+exemption therefore had exactly one effect — the denial message advertised two tools
+that do not exist. Separately, the allow-list shipped without any way for a child to
+read the memory store or the library, even though the stated rule was "exclude the
+tools that *write* memory".
+
+### Fixed
+
+- **`task_begin` / `task_end` are no longer exempt.** On DSH `0.2.1-rc.2` a subagent
+  does not register either tool; exempting them only put phantom names into the
+  `可用工具：` list. `list_subagent_models` stays exempt — it is genuinely scoped,
+  genuinely present, and harmless.
+- **`recall`, `tree_read` and `library_search` are back in the allow-list.** A child
+  could previously not consult the library or the memory tree at all, which broke any
+  delegation whose job was verification rather than production. Memory **writes**
+  (`deep_item`, `branch_edit`, `rule_add`, `memory_forget`, `habit_*`) remain excluded.
+
+### Changed
+
+- Allow-list grows 89 → **92** names.
+
+### Verified
+
+- 6 suites / 95 assertions green.
+- Real machine, post-restart: `delegate(tools: ["read","glob","grep"])` produced a child
+  whose schema held `read / glob / grep / list_subagent_models / subagent`; calling
+  `subagent` was refused with
+  `工具 "subagent" 不在该子代理的授权工具面内（delegate 策略）` and **no grandchild was
+  created**. The visible-but-denied `subagent` is a known limit: `restrict()` cannot
+  remove scoped registrations, and `dsh-tools` exposes no API that can.
+
 ## [0.3.4] — 2026-10-29
 
 **The deployment cap is now on, with a populated allow-list.** Turning `enforceMaxTools`

@@ -95,6 +95,7 @@
           - job_kill
           - job_list
           - job_output
+          - library_search
           - list_agents
           - list_folds
           - present
@@ -102,6 +103,7 @@
           - read
           - read_image
           - read_page
+          - recall
           - schedule_create
           - schedule_delete
           - schedule_list
@@ -125,6 +127,7 @@
           - task_board_set_parent
           - task_board_update
           - todo_write
+          - tree_read
           - update_goal
           - view_canvas
           - web_fetch
@@ -136,8 +139,13 @@
         # 刻意不在上限里、且执行期被 guard 拒掉的：`subagent` / `subagent_fork` /
         # `delegate`（派生通道：留着等于给自己发钥匙）、`plugin_manager`
         # （能装卸插件 = 改写宿主，与"限制子代理"直接冲突，2026-10-29 主动排除）。
-        # `task_begin` / `task_end` / `list_subagent_models` 是 scoped 注册，
-        # `restrict()` 管不到，代码里无条件放行（见 lib/index.js 的 SAFE_SCOPED_TOOLS）。
+        # `list_subagent_models` 是 scoped 注册，`restrict()` 管不到，代码里放行
+        # （见 lib/index.js 的 SAFE_SCOPED_TOOLS）。
+        # `task_begin` / `task_end` 曾经也在豁免集里，2026-10-29 真机实测推翻：
+        # 子代理**没有注册**这两个工具（调用返回 unknown tool），豁免它们的唯一
+        # 效果是让拒绝消息把幽灵工具说成"可用"。已移除。
+        # `recall` / `tree_read` / `library_search`（读记忆与图书馆）已补进上限：
+        # 子代理该能查资料，但不该写记忆 —— 写入类工具仍在下面刻意排除之外。
         # persona 段落在 system prompt 里的位置与名字（同名会遮蔽全局同名段落）。
         sectionOrder: 120
         sectionName: "subagent-guard:persona"
