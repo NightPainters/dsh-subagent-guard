@@ -1,7 +1,7 @@
 {
   "name": "dsh-subagent-guard",
-  "version": "0.2.0",
-  "description": "Sandbox ceiling and destructive-command denylist for DeepSeek Harness subagents",
+  "version": "0.3.4",
+  "description": "Three gates for DeepSeek Harness subagents: sandbox ceiling, destructive-command denylist, and a delegation tool that pins each child's tool surface and system prompt",
   "keywords": [
     "dsh",
     "dsh-plugin",
@@ -10,7 +10,10 @@
     "sandbox",
     "security",
     "guard",
-    "permission"
+    "permission",
+    "delegation",
+    "tool-filter",
+    "persona"
   ],
   "license": "MIT",
   "author": "NightPainters",
@@ -23,10 +26,14 @@
   "files": [
     "./lib/index.js",
     "./lib/rules.js",
+    "./lib/policy.js",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
-    "LICENSE"
+    "LICENSE",
+    "tests",
+    "docs",
+    "CHANGELOG.md"
   ],
   "repository": {
     "type": "git",
@@ -51,9 +58,13 @@
     "@deepseek-ai/schemastery": "~3.18.5"
   },
   "scripts": {
-    "test": "node tests/guard.test.mjs && node tests/apply.test.mjs",
+    "test": "node tests/guard.test.mjs && node tests/policy.test.mjs && node tests/apply.test.mjs && node tests/delegate.test.mjs && node tests/regressions.test.mjs && node tests/audit-20261028.test.mjs",
     "test:rules": "node tests/guard.test.mjs",
-    "test:apply": "node tests/apply.test.mjs"
+    "test:policy": "node tests/policy.test.mjs",
+    "test:apply": "node tests/apply.test.mjs",
+    "test:delegate": "node tests/delegate.test.mjs",
+    "test:regressions": "node tests/regressions.test.mjs",
+    "test:audit": "node tests/audit-20261028.test.mjs"
   },
   "dsh": {
     "bundle": {

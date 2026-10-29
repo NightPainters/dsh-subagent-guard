@@ -96,7 +96,9 @@ test('shouldCapSandbox 只降不升', () => {
   assert.equal(shouldCapSandbox('workspace-write', 'workspace-write'), false)
   assert.equal(shouldCapSandbox('read-only', 'workspace-write'), false, '不能给子代理升档')
   assert.equal(shouldCapSandbox('read-only', 'read-only'), false)
-  assert.equal(shouldCapSandbox('unknown-mode', 'read-only'), false)
+  // 2026-10-28 审计 F1：**未登记**的档位名按「不知道它多宽」处理 ⇒ 压。
+  // 原实现返回 false（不压也不告警），宿主一加新档位这个插件就静默失效。
+  assert.equal(shouldCapSandbox('unknown-mode', 'read-only'), true)
   assert.equal(shouldCapSandbox('danger-full-access', 'unknown-cap'), false)
 })
 

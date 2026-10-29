@@ -1,6 +1,6 @@
 # dsh-subagent-guard
 
-给 [DeepSeek Harness][dsh] 的子代理上两道闸：**沙箱档位硬顶** + **破坏性命令黑名单**。
+给 [DeepSeek Harness][dsh] 的子代理上三道闸：**沙箱档位硬顶** + **破坏性命令黑名单** + **可精确设定工具面与 prompt 的委派工具**。
 
 > English: [README.md](./README.md)
 
@@ -26,7 +26,7 @@ the child keeps the policy it was handed."* 后果是——子代理拿到的是
 
 [note]: https://github.com/jasonkneen/deepseek-harness-plus/blob/master/.agents/notes/implemented/feature/2026-07-25-subagent-policy-inheritance.md
 
-## 两道闸
+## 三道闸
 
 ### 闸一：沙箱档位硬顶（`agent/created`）
 
@@ -73,6 +73,69 @@ the child keeps the policy it was handed."* 后果是——子代理拿到的是
 读不到或超过 `maxScriptBytes` 时**放行并告警**。这是有意的：读不到通常就是路径
 写错，那种脚本本来也执行不起来。只查一层——脚本里再调脚本，不跟。
 
+### 闸三：委派策略（`delegate` 工具）
+
+DSH 0.2 关掉了 `persona` / `toolFilter` 两个参数
+（`dsh-tool-subagent/lib/index.js:355` 明文拒绝），只剩 `agentPreset` 一条路能改
+子代理的组合。但 harness 自己在**冷恢复**路径上仍然用着这两个机制
+（`dsh-subagent/lib/types/child-agent.js:153-167`）：
+
+```js
+childCtx.systemPrompt.section(...)   // 遮蔽同名的全局段落
+childCtx.tools.restrict(...)         // 移除继承面工具
+```
+
+闸三把这条路接回**新派发**：注册一个 `delegate` 工具，参数是 `prompt` +
+可选的 `persona` + 可选的 `tools`：
+
+1. 先把策略登记在**父会话 id** 下，再创建任何东西；
+2. `subagents.startActivation()` 创建子代理；
+3. `agent/created`（serial，且 await 在排队输入之前）里按父会话认领策略并施加到
+   子代理自己的上下文；
+4. `startActivation` 返回后**核对子代理确实消费了策略**——没消费就取消它并抛错。
+
+第 4 步是 fail-closed 的落点：**收不住工具面的子代理，不许它带着未知权限跑**。
+
+#### 为什么必须两层，而不是一层
+
+`restrict()` 只遮**继承面**。它自己的文档
+（`dsh-tools/lib/index.js:2985-2987`）写着：*"Restrictions intersect; scoped
+registrations remain visible"*。而官方 `dsh-tool-subagent:605-607` 会在
+`agent/created` 里把 `subagent`、`list_subagent_models` 直接注册到子代理自己的
+上下文上。
+
+修复前在真机实测到的形状：一个只被授予 **`read`** 的子代理调用 `subagent`，
+派出一个孙代理，孙代理带着 `delegationDepth: 2` 和 **97 个工具**（含 `pwsh`、
+`write`、`edit`、`workflow`）跑起来了——因为孙代理不是 `delegate` 派发的，策略
+从未施加。
+
+所以闸三两层的分工：
+
+| 层 | 机制 | 覆盖 |
+|---|---|---|
+| 可见面 | `childCtx.tools.restrict({ allow })` | 继承来的工具 |
+| 执行面 | agent-scoped `childCtx.tools.guard()` | `restrict` 看不见的 scoped 工具 |
+
+第二层对任何不在白名单里的工具都拒绝：
+`工具 "subagent" 不在该子代理的授权工具面内（delegate 策略）；可用工具：read`。
+
+#### 部署级上限
+
+`tools` 是模型传的，不能当上限信任。开 `enforceMaxTools: true` 后：
+
+```
+子代理最终工具面 = 模型传的 tools ∩ 部署的 maxTools
+```
+
+模型只能收窄，永远不能放宽。`maxTools: []` 配 `enforceMaxTools: true` 等于
+一个工具都不给。
+
+#### 并发
+
+策略按父会话认领，而 `maxActiveSubagents` 默认 50。两次 `delegate` 交错就可能把
+A 的策略绑到 B 的子代理上——正是这道闸要防的事。所以「登记 → 创建 → 核对」整段
+串行化（`serializeBind`，默认开）。
+
 ## 安装
 
 ```bash
@@ -105,11 +168,14 @@ dsh plugin add dsh-subagent-guard
         maxScriptBytes: 262144
         # 自定义规则（正则源串，**整体替换**默认值，不是追加）
         denyPatterns:
-          - '\\bvssadmin\\b[^\\r\\n]*\\b(?:delete|resize|revert)\\b'
-          - '\\bdiskpart\\b'
+          # ⚠️ 这里必须用**双引号**。YAML 单引号里的反斜杠是字面量，
+          # '\\bvssadmin' 会编译成「匹配一个反斜杠加 bvssadmin」的正则，
+          # 规则从此一条都匹配不上，而且没有任何告警。
+          - "\\bvssadmin\\b[^\\r\\n]*\\b(?:delete|resize|revert)\\b"
+          - "\\bdiskpart\\b"
 ```
 
-启动时会打一行**生效配置**（`生效配置：subagentSandboxCap=… denyScope=… 规则=16 条 …`），
+启动时会打一行**生效配置**（`生效配置：subagentSandboxCap=… denyScope=… 规则=18 条 …`），
 所以"文档默认值"与"实际部署值"不一致会当场可见，而不是静默降级。
 
 非法配置（未知档位、未知作用域、编译不过的正则、非正的体积上限）在**加载期抛错**，
@@ -127,6 +193,16 @@ dsh plugin add dsh-subagent-guard
   宿主一起用。
 - `denyScope: subagent` 依赖 `delegationDepthOf`；它抛错时按「是子代理」处理
   （fail-closed）。反过来说，如果它**对父会话**也抛错，父会话自己的命令同样会被拦。
+- **闸三只保护它自己注册的 `delegate` 工具。** 不在委派窗口内时，父会话里官方的
+  `subagent` / `subagent_fork` 仍然可用。模型改用它们、而不是 `delegate`，拿到的子代理
+  **工具面没有被收窄**——正是本插件针对的那个 97 工具形状。此时闸一仍会压它的沙箱，
+  所以这是「收窄面缺失」，不是提权。**委派窗口内**这两个工具会被直接拒绝：认领按
+  `parentSession` 匹配，窗口里冒出来的官方子代理会把待认领的策略抢走。要连窗口外也堵，
+  得自己禁掉官方那两个工具。
+- **闸三依赖 `subagents` 服务。** 它如果始终不出现，`delegate` 不注册，闸一闸二照常
+  工作。这个降级会记一条日志，但从模型视角看就是**闸三没了**。
+- **未登记的沙箱档位按最宽处理**，并压到 `read-only` 加一条告警。宿主新增档位对本插件
+  是一次迁移事件：否则闸一会把它当成"本来就不宽"而放过去。
 - 改写子代理档位靠追加 `sandbox/mode` 事件（会话日志是唯一存储），重启后可通过
   replay 复现；子代理会话被归档后不再重放。
 
@@ -134,26 +210,36 @@ dsh plugin add dsh-subagent-guard
 
 ## 兼容性
 
-已核对到 `@deepseek-ai/dsh-*` **0.2.1-rc.2**（2026-10-24）。插件**复制**了两小段官方
-实现，而不是 import 兄弟 `dsh-*` 包——因为 profile 的 `node_modules` 通常只有
-`schemastery`，静态 import 会在加载期解析失败。代价是：如果 DSH 改了
-`subagentDepth`、`delegationDepth` 或 `sandbox/mode` 事件，这两份副本会**静默失配**。
-插件会在运行时尝试 `import()` 官方包做比对，不一致时告警——但这个检查只在官方包
-恰好可解析时才生效。
+已核对到 `@deepseek-ai/dsh-*` **0.2.1-rc.2**（0.3.3，2026-10-29——闸一闸二在一台真实的
+`danger-full-access` 父会话上验过，闸三在测试台与同一台真机上都验过）。插件**复制**了
+两小段官方实现，而不是 import 兄弟 `dsh-*` 包——因为 profile 的 `node_modules` 通常只有
+`schemastery`，静态 import 会在加载期解析失败。代价是：如果 DSH 改了 `subagentDepth`、
+`delegationDepth` 或 `sandbox/mode` 事件，这两份副本会**静默失配**。插件会在运行时尝试
+`import()` 官方包做比对，不一致时告警——但这个检查只在官方包恰好可解析时才生效。
 
 ## 测试
 
 ```bash
-node tests/guard.test.mjs    # 纯规则层，不依赖宿主
-node tests/apply.test.mjs    # 接线层，假 ctx 驱动
+npm test   # 六个套件，90 条用例，全部脱离宿主
 ```
 
-33 条用例，全部脱离宿主：`lib/rules.js` 不 import 任何 DSH 包。
+| 套件 | 条数 | 覆盖面 |
+|---|---|---|
+| `guard.test.mjs` | 13 | 规则层：正则、脚本路径、深度、档位强弱 |
+| `policy.test.mjs` | 20 | 委派策略：上限裁剪、段落渲染、待认领队列 |
+| `apply.test.mjs` | 20 | 接线：闸一闸二（假 ctx） |
+| `delegate.test.mjs` | 21 | 闸三接线、并发、fail-closed 认领 |
+| `regressions.test.mjs` | 7 | YAML 引号、pending 清理、上限交集 |
+| `audit-20261028.test.mjs` | 9 | 审计发现里凡能脱离宿主钉住的部分 |
 
 ## 外部审计
 
 - [2026-10-24 拦截面缺口审计](./docs/research/2026-10-24-external-audit.md)：
   真实部署上的用户报告了五条缺口，附维护者逐条裁定，以及 0.2.0 落地的修法。
+- **2026-10-28 内部对抗审计**（三路红队、埋 8 枚金丝雀、召回 8/8）：五类共 22 条发现
+  （静默失效 / 记账说谎 / 边界翻转 / 修复不成立 / 门与旁路）。修法落在 0.3.1 与 0.3.2；
+  **0.3.3 来自测试台**——它抓到了 0.3.1 那次修复自己引入的回退。记录保存在维护者私有
+  工作区，不随本仓库分发。
 
 ## 许可证
 

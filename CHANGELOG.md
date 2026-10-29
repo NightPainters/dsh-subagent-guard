@@ -4,6 +4,154 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.4] — 2026-10-29
+
+**The deployment cap is now on, with a populated allow-list.** Turning `enforceMaxTools`
+on exposed a gap the previous tests did not cover: `restrict()` only narrows the global
+tool surface, so the agent-scoped registrations (`task_begin`, `task_end`,
+`list_subagent_models`) stayed visible *and* were denied by gate 3's execution-time
+guard — a child could see the tools but calling them failed. Caught by a real-machine
+probe: a `delegate(tools: ["read"])` child self-reported
+`list_subagent_models / read / subagent / task_begin / task_end`.
+
+### Fixed
+
+- **Scoped harness tools are exempt from the gate 3 guard.** `task_begin`, `task_end`
+  and `list_subagent_models` are always allowed, regardless of `maxTools`; they cannot
+  escape the cap because `restrict()` never covered them in the first place. The
+  derivation channels (`subagent`, `subagent_fork`, `delegate`) are **not** exempt — a
+  child that can spawn is a child that can hand its grandchild a wider policy.
+
+### Changed
+
+- **`cordis.patch.yml` now ships with `enforceMaxTools: true`** and an 89-name allow-list
+  covering everything except the memory-writing tools. The list is a ceiling, not an
+  assignment: each `delegate()` call narrows it further via `tools: [...]`.
+- **Three tools are deliberately excluded** from the ceiling:
+  - `plugin_manager` — a child that can install or remove plugins can rewrite the host,
+    which contradicts the entire point of limiting children;
+  - `task_board_run` — it opens a *new execution session* at parent level, outside every
+    gate this plugin installs, so a child holding it can run arbitrary work unconstrained;
+  - `subagent` / `subagent_fork` / `delegate` — the derivation channels themselves
+    (see the fix above).
+  Add any of them back only with a deliberate decision.
+
+## [0.3.3] — 2026-10-29
+
+**Gate 3 registered no tool at all when `subagents` arrived late.** Found on a test bench,
+not by any test: `subagents` is an asynchronously-provided service, so `ctx.get('subagents')`
+is `undefined` during `apply()`. Since 0.3.1 had removed `subagents` from `inject` (see
+below), that path took the "service unavailable" branch, logged at most one line, and
+never registered `delegate`. Three gates silently became two, and `--dump-config` still
+showed the plugin row.
+
+### Fixed
+
+- Gate 3 now attaches through `ctx.inject(['subagents'], cb)` instead of polling
+  `ctx.get()` once during `apply()`. The tool appears when the service appears, and the
+  absence of `subagents` no longer disables gates 1 and 2.
+
+## [0.3.2] — 2026-10-29
+
+Second round of the same audit, covering the twelve findings the coverage path reported
+after the first round's fixes had already shipped.
+
+### Fixed
+
+- **Unknown sandbox modes are now treated as the widest.** An unregistered mode used to
+  compare as "not wider than the cap" and was left untouched without a word — so a host
+  that adds a mode would silently escape gate 1. Unknown now caps to `read-only` and warns.
+- **`commandArg` accepts arrays and nested arguments.** It used to read one exact
+  top-level string, so a shell tool passing `['cmd', '/c', …]`, or nesting the command
+  under another field, was invisible to gate 2.
+- **Every `-File` path in a command line is inspected**, not just the first.
+- **`commandArg: ''` and `provider: ''` now fail at load.** The first silently disabled
+  gate 2; the second contradicted its own comment and always threw `NO_PROVIDER` later.
+- **Config validation covers every field** that can produce a silent no-op, plus a check
+  that `maxTools` names real tools.
+- **`subagents` is validated by shape, not by `!== undefined`.**
+- **Gate 1 ignores agents with no `parentSession`.** Root sessions also emit
+  `agent/created`; a malformed one used to be capped as if it were a child.
+- **A failed claim disposes the activation** when `cancel()` is out of reach (external
+  backends), instead of leaving an unconstrained child running.
+- **Delegation windows reject the official `subagent` / `subagent_fork`.** Claiming is
+  keyed by `parentSession`, so an official child created first would steal the pending
+  policy. `subagent/descriptor` is written inside the child's *first turn*, later than
+  `agent/created`, so label-based matching is not available.
+- **The failed dynamic `import` of the official package now warns** instead of silently
+  losing the cross-check.
+
+## [0.3.1] — 2026-10-28
+
+First round of adversarial audit fixes (two red-team paths; the third arrived later and
+drove 0.3.2).
+
+### Fixed
+
+- **The `denyPatterns` YAML example used single quotes**, so copying it verbatim produced
+  rules that never matched — while startup still printed the rule count. Examples now use
+  double quotes, with a comment saying why.
+- **A failed claim left its policy in the pending queue**, so the next delegation on the
+  same parent could inherit the previous child's tool surface and prompt.
+- **Cancellation was announced before it was attempted**, and a string cancel cause
+  tripped `assertNever`. Now the message follows the actual outcome and says
+  "could not confirm cancellation" when it cannot.
+- **`hardCap` logged an error on its success path** and hard-coded "mode unreadable".
+- **The refusal text claimed "cannot be bypassed in this session"** while telling the
+  model to edit the profile. It now says it stops accidents, not adversaries, and names
+  base64 / variable splicing / wrapping as escapes.
+- **`exec.cwd` does not exist** on the host's tool-run context; relative script paths now
+  resolve against `agent.session.header.cwd`.
+- **`shellTools` is documented as hint-only** — argument-shape detection is what actually
+  finds command tools.
+- **The tool description no longer implies a cap that is off by default.**
+
+## [0.3.0] — 2026-10-28
+
+**The two plugins are now one.** `dsh-delegate-policy` (a separate package that pinned
+each child's tool surface and system prompt) is merged in as **gate 3**. Cloud installs
+need a single bundle; deployments that want to tune the split can ask their agent to
+edit the config instead of adding a second package.
+
+The merge is not cosmetic — running the two halves separately left a real hole:
+
+### Fixed
+
+- **A read-only child could spawn an all-tools grandchild.** `tools.restrict()` masks
+  only the inherited (global) tool surface: `dsh-tools/lib/index.js:2985-2987` states
+  *"Restrictions intersect; scoped registrations remain visible"*. The official
+  `dsh-tool-subagent:605-607` registers `subagent` and `list_subagent_models` directly
+  on the child's own context from `agent/created`, so a restricted child still saw them.
+  Calling `subagent` produced a grandchild that the policy layer never registered a
+  policy for — measured on a live deployment as `delegationDepth: 2` with `tools(97)`
+  including `pwsh`, `write`, `edit` and `workflow`, from a parent that had been handed
+  `read` only.
+  Two layers now hold: `restrict()` cleans the visible surface, and an agent-scoped
+  `tools.guard()` denies every unlisted tool at execution time.
+- **Concurrent delegations could be bound to the wrong child.** Policies are claimed
+  per parent session, and `maxActiveSubagents` defaults to 50. Two interleaved `delegate`
+  calls could hand child A's policy to child B — the exact failure this gate exists to
+  prevent. The claim → create → verify sequence is now serialized (`serializeBind`,
+  default on).
+
+### Added
+
+- Gate 3: a `delegate` tool that takes `prompt`, optional `persona` and optional `tools`.
+  The persona is a real system-prompt section (not a message prefix); `tools` becomes a
+  scoped `restrict()` plus the execution-time guard above.
+- `enableDelegateTool`, `toolName`, `provider`, `enforceMaxTools`, `maxTools`,
+  `sectionOrder`, `sectionName`, `serializeBind` configuration options.
+- Deployment cap: the child's final tool surface is `tools ∩ maxTools`. The model may
+  narrow it, never widen it. `maxTools: []` with `enforceMaxTools: true` means the child
+  gets no tools at all.
+- Fail-closed binding: if the child does not consume its policy, the delegation cancels
+  the child and throws rather than leaving an unpoliced subagent running.
+
+### Notes
+
+- Gates 1 and 2 work without the `subagents` service; gate 3 registers its tool only
+  when that service is present.
+
 ## [0.2.0] — 2026-10-24
 
 Response to an [external coverage audit](./docs/research/2026-10-24-external-audit.md)

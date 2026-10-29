@@ -43,6 +43,9 @@ function makeCtx({ override, defaultMode = 'danger-full-access' } = {}) {
       defaultMode,
     },
   }
+  // 2026-10-28 审计 F11：插件改用 `ctx.get('sandboxPolicy')` 可选获取，
+  // 这样服务缺失时不会再让整个插件 INACTIVE。
+  ctx.get = (serviceName) => (serviceName === 'sandboxPolicy' ? ctx.sandboxPolicy : undefined)
   return { ctx, guards, listeners, disposers, logs }
 }
 
@@ -50,7 +53,12 @@ function makeCtx({ override, defaultMode = 'danger-full-access' } = {}) {
 function makeAgent(depth, sessionId = `s-${depth}`) {
   const appended = []
   const session = {
-    header: { delegationDepth: depth },
+    // 2026-10-28 审计 F2：闸一只对**真正有父会话**的 agent 生效
+    // （根会话创建时也会发 `agent/created`，不能把它当子代理压档）。
+    header: {
+      delegationDepth: depth,
+      ...(depth > 0 ? { parentSession: `parent-${depth}` } : {}),
+    },
     sessionId,
     append: (type, data) => appended.push([type, data]),
   }
@@ -71,11 +79,20 @@ const baseConfig = {
   denyScope: 'all',
   scriptInspection: true,
   maxScriptBytes: 262144,
+  // 本文件只测闸一（档位）与闸二（命令），关掉闸三，避免注册 delegate 工具。
+  enableDelegateTool: false,
+  toolName: 'delegate',
+  provider: 'spawn',
+  enforceMaxTools: false,
+  maxTools: [],
+  sectionOrder: 120,
+  sectionName: 'subagent-guard:persona',
+  serializeBind: true,
 }
 
 test('导出的契约形状正确', () => {
   assert.equal(name, 'dsh-subagent-guard')
-  assert.deepEqual(inject, ['tools', 'sandboxPolicy'])
+  assert.deepEqual(inject, ['tools'])
   assert.equal(typeof Config, 'function', 'Config 必须是 Schemastery schema')
   assert.equal(typeof apply, 'function')
 })
@@ -144,7 +161,7 @@ test('闸一：写入档位抛错时用 error 留痕，不炸宿主', () => {
     options: {},
     sessionId: 's-broken',
     session: {
-      header: { delegationDepth: 1 },
+      header: { delegationDepth: 1, parentSession: 'parent-broken' },
       append: () => {
         throw new Error('append failed')
       },
