@@ -4,6 +4,35 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-10-29
+
+**Availability fix: `tools.restrict()` rejected the whole allow-list whenever it named a
+tool that is not on the *global* surface, which killed every delegation in the live
+deployment.**
+
+`restrict()` validates names against `view(scope).restrictableNames` and throws
+`names unknown global tools "…"; known global tools: …` for anything else. An allow-list
+naturally mixes two kinds of name:
+
+- globally-registered tools (`pwsh`, `read`, `write`, …) — `restrict()` can narrow these;
+- agent-scoped registrations (dsh-ling's `recall` / `tree_read` / `library_search`, the
+  official `subagent` / `list_subagent_models`) — `restrict()` cannot see them at all.
+
+Measured here: the deployment cap listed three dsh-ling tools, so `restrict()` threw on
+every call and each delegation was cancelled. The testbed never reproduced it because its
+profile has no dsh-ling, so the same allow-list matched in full.
+
+### Fixed
+- Narrowing is now tolerant: when `restrict()` rejects names, those names are dropped from
+  the `restrict` call and **retried**; whatever survives still narrows the global surface.
+  Dropped names stay in the runtime guard's allow-set, so scoped tools keep working while
+  `restrict()` keeps doing what it can. Three attempts, then fail-closed as before.
+- Errors that are *not* name rejections still fail closed — a genuine `restrict()` failure
+  must never degrade into a silent pass.
+- `restrict({ allow: [] })` is legal (only `restrict({})` is the no-op error), so an empty
+  cap still masks the entire global surface instead of being skipped.
+- The fail-closed diagnostic trailer now reports which names had to be dropped.
+
 ## [0.3.9] — 2026-10-29
 
 **Availability fix: `delegate` failed closed on every call in the live deployment, because

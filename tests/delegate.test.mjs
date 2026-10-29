@@ -36,17 +36,33 @@ function withDefaults(overrides = {}) {
  * @param {{ providerExists?: boolean, emitCreated?: boolean, restrictThrows?: boolean }} opts
  */
 function makeHarness(opts = {}) {
-  const { providerExists = true, emitCreated = true, restrictThrows = false } = opts
+  const {
+    providerExists = true,
+    emitCreated = true,
+    restrictThrows = false,
+    restrictUnknown = [],
+  } = opts
   const listeners = new Map()
   const log = []
   const calls = { restrict: [], sections: [], cancelled: [], guards: [], globalGuards: [] }
   let toolDef
   let createdHandler
+  let restrictAttempts = 0
 
   const childCtx = {
     tools: {
       restrict(filter) {
+        restrictAttempts += 1
         if (restrictThrows) throw new Error('restrict exploded')
+        // 首次调用模拟真机：白名单里混着 scoped 注册（或根本不存在）的工具名，
+        // `restrict()` 会整单抛错并点名。第二次起按剔除后的集合正常工作。
+        if (restrictAttempts === 1 && restrictUnknown.length > 0) {
+          throw new Error(
+            `tools.restrict() names unknown global tool${restrictUnknown.length > 1 ? 's' : ''} ` +
+              `${restrictUnknown.map((name) => `"${name}"`).join(', ')}; ` +
+              'known global tools: baz, foo, read',
+          )
+        }
         calls.restrict.push(filter)
         return () => {}
       },
@@ -549,4 +565,48 @@ test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦�
   const denied = bail({ name: 'subagent', agent: { sessionId: value.subagentId } })
   assert.match(denied, /冷恢复兜底/)
   assert.match(denied, /不在该子代理的授权工具面内/)
+})
+
+// 2026-10-29 真机事故（fold #58）：白名单里混进 dsh-ling 的 `recall` / `tree_read` /
+// `library_search`。它们由 agent-scoped 注册，不在 `restrict()` 认识的
+// `restrictableNames` 里，于是 `restrict({ allow: [...92 项] })` 整单抛错
+// `names unknown global tools ...`，每一次 delegate 都 fail-closed——而测试台
+// 的 profile 没有 dsh-ling，同一条白名单在那边全部命中，永远复现不了。
+test('白名单含 scoped 注册的工具名时降级收窄，而不是整单 fail-closed', async () => {
+  const h = makeHarness({ restrictUnknown: ['recall', 'tree_read'] })
+  apply(h.ctx, withDefaults())
+
+  const value = await callDelegate(h, {
+    description: '读记忆',
+    prompt: 'x',
+    tools: ['read', 'recall', 'tree_read'],
+  })
+
+  // 委派成功：不再因为一个名字不认识就整单失败。
+  assert.equal(typeof value.subagentId, 'string')
+  assert.deepEqual(value.tools, ['read', 'recall', 'tree_read'])
+
+  // restrict 最终只拿到全局可收窄的那部分（第一次抛错不算落地）。
+  assert.equal(h.calls.restrict.length, 1)
+  assert.deepEqual(h.calls.restrict[0].allow, ['read'])
+
+  // 被剔出 restrict 的两个名字仍然由 scoped guard 放行 —— 它们是真实存在的
+  // scoped 工具，不能因为 restrict 不认就把它们拒掉。
+  const scopedGuard = h.calls.guards[0]
+  assert.equal(scopedGuard({ name: 'recall' }), undefined)
+  assert.equal(scopedGuard({ name: 'tree_read' }), undefined)
+  // 授权外的工具照旧被拒。
+  assert.match(scopedGuard({ name: 'pwsh' }), /不在该子代理的授权工具面内/)
+})
+
+// 反面：restrict 抛的不是「名字不认识」时，仍然必须 fail-closed（不能把真失败
+// 降级成静默放行）。
+test('restrict 抛非命名类错误时仍然 fail-closed', async () => {
+  const h = makeHarness({ restrictThrows: true })
+  apply(h.ctx, withDefaults())
+
+  await assert.rejects(
+    () => callDelegate(h, { description: '只读', prompt: 'x', tools: ['read'] }),
+    /未能绑定工具面与 prompt.*fail-closed/,
+  )
 })
