@@ -36,7 +36,7 @@
         # 部署级工具上限。开启后，子代理最终工具面 = 模型传的 tools ∩ maxTools，
         # 模型永远不能自己放宽。
         #
-        # 取向（2026-10-29 尝生拍板）：这里放"除记忆写入类之外的全部工具"作天花板，
+        # 取向（2026-10-29 部署决策）：这里放"除记忆写入类之外的全部工具"作天花板，
         # 具体每次派发时再由父模型按任务性质挑（`delegate(tools: [...])` 只能更窄）。
         # 记忆写入类（deep_item / memory_forget / memory_backfill / branch_edit /
         # rule_add / habit_propose / habit_resolve）不在表里 —— 而且子代理本来就

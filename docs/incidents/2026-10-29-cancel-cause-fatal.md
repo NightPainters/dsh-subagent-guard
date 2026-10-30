@@ -108,8 +108,8 @@ lastTurnCompleted: event.data.reason.kind === "completed"
 ### 为什么是子代理会话
 
 `turn/end` 的 reason 只在这个 `turn()` 的 finally 里写一次。中毒的文件是
-`6cd33003-5a58-457d-90a1-b4e2af528eaf`（`origin: "subagent"`、`delegationDepth: 1`、
-label `冷恢复探针A`、父会话 `session-672711cc`），只有 1703 B、3 帧，事件序列为：
+一个 id 以 `6cd33003` 开头的子代理会话（`origin: "subagent"`、`delegationDepth: 1`、
+label `冷恢复探针A`、父会话 id 以 `672711cc` 结尾），只有 1703 B、3 帧，事件序列为：
 
 ```
 subagent/descriptor → sandbox/mode(danger-full-access, delegation) → approval/policy
@@ -126,7 +126,7 @@ subagent/descriptor → sandbox/mode(danger-full-access, delegation) → approva
 
 | 环节 | 证据 |
 |---|---|
-| 崩溃时刻 | `E:\DSH-Portable\logs\last-start-error.txt` = `2026/10/29 20:53:33.28 DSH START FAILED` |
+| 崩溃时刻 | 启动器错误日志 `last-start-error.txt` = `2026/10/29 20:53:33.28 DSH START FAILED` |
 | 脏事件存在 | 全量扫描 981 个当前代（v4）会话日志、2936 个 `turn/end`，**仅此 1 处** `reason: null` |
 | 脏事件位置 | 文件 `frame:2`、字节区间 `[546,1703)`、帧内第 5 行（0-based） |
 | 正常形态 | 同会话其余 `turn/end` 全部为 `{"kind":"completed"}` |
