@@ -82,6 +82,9 @@ function makeAgent(depth, sessionId = `s-${depth}`) {
  */
 const baseConfig = {
   enabled: true,
+  // 配置页的两个总策略开关；默认开。
+  enforceToolFace: true,
+  enforceSandbox: true,
   subagentSandboxCap: 'workspace-write',
   commandArg: 'command',
   shellTools: ['bash', 'pwsh', 'win_bash'],
@@ -125,6 +128,16 @@ test('闸一：danger-full-access 的子代理被压到 workspace-write', () => 
 
   assert.deepEqual(appended, [['sandbox/mode', { mode: 'workspace-write' }]])
   assert.ok(logs.some(([, m]) => m.includes('硬顶')))
+})
+
+test('配置页「权限拦截」关掉时，闸一完全不动子代理档位', () => {
+  const { ctx, listeners } = makeCtx({ override: undefined, defaultMode: 'danger-full-access' })
+  apply(ctx, { ...baseConfig, enforceSandbox: false })
+
+  const { agent, appended } = makeAgent(1)
+  listeners['agent/created']({ agent })
+
+  assert.deepEqual(appended, [], 'enforceSandbox=false 时不该写 sandbox/mode')
 })
 
 test('闸一：顶层会话不动', () => {
@@ -533,4 +546,15 @@ test('闸二：相对脚本路径按会话 cwd 解析，进程 cwd 的同名文�
     rmSync(sessionDir, { recursive: true, force: true })
     rmSync(procDir, { recursive: true, force: true })
   }
+})
+
+test('配置页开关是 `.volatile()` 引用（读值走 get()）时同样生效', () => {
+  const { ctx, listeners } = makeCtx({ override: undefined, defaultMode: 'danger-full-access' })
+  // 真实 Loader 把 volatile 字段包成 Volatile<T>，裸布尔只存在于测试里。
+  apply(ctx, { ...baseConfig, enforceSandbox: { get: () => false } })
+
+  const { agent, appended } = makeAgent(1)
+  listeners['agent/created']({ agent })
+
+  assert.deepEqual(appended, [], 'volatile 引用的 get() 返回 false 时，闸一也不该动档位')
 })

@@ -7,6 +7,16 @@
       name: dsh-subagent-guard
       config:
         enabled: true
+        # 配置页（插件页 → dsh-subagent-guard）上的两个开关。它们由人切换，
+        # **不要**交给 Agent 改；Agent 改的是下面的规则与工具清单。
+        # 关掉「工具面拦截」= 父 Agent 指定的 tools 一般不再生效（显式 tools: [] 例外，
+        # 零工具永远照办）。本文件下面开了 enforceMaxTools，所以关掉后子代理拿到的仍是
+        # maxTools 那份白名单、派生通道也仍被挡；只有 enforceMaxTools: false 时才是
+        # 「继承父会话完整面」。
+        enforceToolFace: true
+        # 关掉「权限拦截」= 沙箱硬顶整个跳过（连同三条 fail-closed 分支一起短路），
+        # 子代理的沙箱档位完全跟随父会话。
+        enforceSandbox: true
         # 子代理沙箱硬顶：inherit | read-only | workspace-write | danger-full-access
         # 父会话的档位是子代理的原始上限；这里再补一层硬顶，只降不升。
         subagentSandboxCap: workspace-write

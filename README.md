@@ -195,6 +195,26 @@ Or declare it in your profile as a `file:` / `link:` dependency and add
 
 ## Configuration
 
+### The card (the only two things a person needs)
+
+Open **Plugins → dsh-subagent-guard**. Between the description and the component list the plugin
+renders two switches:
+
+| Switch | Field | Off means |
+|---|---|---|
+| Tool-face interception | `enforceToolFace` | The `tools` a parent passes to `delegate` are ignored, except an explicit `tools: []` (zero tools is the strictest request and is always honoured). Without a deployment ceiling the child inherits the parent's full surface; **with `enforceMaxTools: true` the deployment whitelist still applies**. `persona` and the guidance section still apply. The derived-channel block is only lifted when there is no deployment ceiling — an unrestricted child can spawn grandchildren again, so turn this off only when you trust the whole chain. |
+| Permission interception | `enforceSandbox` | The sandbox ceiling is skipped entirely; the child follows the parent's own mode. |
+
+Both are `volatile`, so flipping one writes the profile patch and takes effect immediately — no
+restart. To disable the plugin altogether use the bundle switch above the card, not a third
+setting.
+
+Everything else — deny patterns, tool lists, script inspection — is deliberately **not** on the
+card. Those belong to the Agent working in your session; `AGENTS.md` documents the split and the
+file layout.
+
+### The file layer
+
 Override by `id` in your profile, or edit the bundled patch:
 
 ```yaml
@@ -203,6 +223,8 @@ Override by `id` in your profile, or edit the bundled patch:
       name: dsh-subagent-guard
       config:
         enabled: true
+        enforceToolFace: true
+        enforceSandbox: true
         # inherit | read-only | workspace-write | danger-full-access
         subagentSandboxCap: workspace-write
         # all = parent and subagents; subagent = subagents only
@@ -253,6 +275,25 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
 
 ## Known limits
 
+- **The switches are a human decision, not a privilege boundary.** Whoever holds a logged-in Web
+  session can flip them, and a subagent granted browser-driving tools (`ego_*`) runs inside that
+  same session — so an agent with browser control can turn the interception off. The gates are
+  enforced per tool call; the switches are not protected against the agent they are meant to
+  confine. Grant `ego_*` to subagents only with that in mind.
+- **Turning off permission interception short-circuits more than the ceiling.** The early return
+  also skips the three fail-closed branches (missing `sandboxPolicy`, throwing `overrideOf`,
+  unregistered mode), and it does not change approval handling. "Follow the parent" describes the
+  sandbox mode only.
+- **Switch flips are not written to the session log.** The plugin logs the effective values once at
+  startup and warns when it skips the ceiling, but the loader's volatile update leaves no audit
+  event.
+- **The card binds to the bundle's profile entry id.** The page looks up the settings namespace
+  `dsh-subagent-guard` (the id in the bundled patch). If you re-register the plugin under a
+  different row id, the card renders but cannot read or write the switches; keep the bundled id.
+- **A settings write materializes the whole effective config into your profile patch.** That is
+  the host's settings writer, not this plugin: after the first switch flip your patch may contain
+  every default (including a machine-specific `maxTools` list). Harmless, but noisy and worth
+  reviewing before you commit a profile.
 - **Text matching, not a syscall sandbox.** `run_code`, `node -e`, inline evaluation
   (`pwsh -c "…"`), and multi-level script chains are not inspected — gate 1 is the
   backstop for those.
@@ -374,15 +415,15 @@ the package happens to be resolvable.
 ## Tests
 
 ```bash
-npm test   # six suites, 123 cases, no host required
+npm test   # six suites, 129 cases, no host required
 ```
 
 | suite | cases | covers |
 |---|---|---|
 | `guard.test.mjs` | 19 | rules layer: regex, command normalization, script paths (incl. quoted separators and `cmd /c` sub-commands), depth, mode ranking |
 | `policy.test.mjs` | 21 | delegation policy: caps, derived-tool rejection, sections, pending queue |
-| `apply.test.mjs` | 27 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
-| `delegate.test.mjs` | 39 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
+| `apply.test.mjs` | 29 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
+| `delegate.test.mjs` | 43 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
 | `regressions.test.mjs` | 7 | YAML quoting, pending cleanup, cap intersection |
 | `audit-20261028.test.mjs` | 10 | every audit finding that can be pinned host-free |
 
@@ -400,3 +441,5 @@ npm test   # six suites, 123 cases, no host required
 ## License
 
 MIT — see [LICENSE](./LICENSE).
+
+

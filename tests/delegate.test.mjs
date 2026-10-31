@@ -11,6 +11,9 @@ import { ABSENT_CHANNELS_NOTE } from '../lib/policy.js'
 function withDefaults(overrides = {}) {
   return {
     enabled: true,
+    // 配置页的两个总策略开关；默认开。
+    enforceToolFace: true,
+    enforceSandbox: true,
     // 闸一、闸二：本文件只测闸三，档位设 inherit、黑名单清空，避免干扰。
     subagentSandboxCap: 'inherit',
     commandArg: 'command',
@@ -248,6 +251,24 @@ test('模型请求在白名单内 ⇒ 原样施加', async () => {
 
   assert.deepEqual(value.tools, ['read', 'grep'])
   assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }])
+})
+
+test('配置页「工具面拦截」关掉时，tools 被忽略、子代理继承完整面', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceToolFace: false }))
+  const value = await callDelegate(h, {
+    description: '审查',
+    prompt: '审查这个仓库',
+    persona: '你是严格的审查员。',
+    tools: ['read', 'grep'],
+  })
+
+  assert.equal(value.kind, 'delegation')
+  assert.deepEqual(h.calls.restrict, [], 'enforceToolFace=false 时不该调用 restrict')
+  // persona 与说明段落照常施加；只是不再有工具面清单。
+  assert.equal(h.calls.sections.length, 1)
+  assert.match(h.calls.sections[0].text, /你是严格的审查员。/)
+  assert.doesNotMatch(h.calls.sections[0].text, /可用工具：/)
 })
 
 test('模型请求超出部署上限 ⇒ 抛错且不创建子代理（不静默裁剪）', async () => {
@@ -984,4 +1005,28 @@ test('T1：拿不到会话 id 的子代理不登记 pinned，绑定必须 fail-c
   )
   assert.ok(error, '绑定失败必须 fail-closed，而不是假装成功')
   assert.match(String(error.message), /原因=sidOf/)
+})
+
+test('「工具面拦截」是 volatile 引用时同样生效', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceToolFace: { get: () => false } }))
+  const value = await callDelegate(h, { description: 'x', prompt: 'y', tools: ['read'] })
+  assert.equal(value.kind, 'delegation')
+  assert.deepEqual(h.calls.restrict, [], 'volatile 引用返回 false 时不该 restrict')
+})
+
+test('「工具面拦截」关掉 + 部署上限：仍压到部署白名单，不是继承全量面', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceToolFace: false, enforceMaxTools: true, maxTools: ['read', 'grep'] }))
+  const value = await callDelegate(h, { description: 'x', prompt: 'y', tools: ['read'] })
+  assert.equal(value.kind, 'delegation')
+  assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }], '部署上限必须继续生效（red-4 R3）')
+})
+
+test('「工具面拦截」关掉时，显式的 tools: [] 仍被尊重（零工具不会被放大成全量）', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceToolFace: false, enforceMaxTools: true, maxTools: ['read', 'grep'] }))
+  const value = await callDelegate(h, { description: 'x', prompt: 'y', tools: [] })
+  assert.equal(value.kind, 'delegation')
+  assert.deepEqual(h.calls.restrict, [{ allow: [] }], 'red-4 R2：空数组是最严的请求，开关关掉也不能放宽')
 })

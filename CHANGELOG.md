@@ -4,6 +4,53 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-10-31
+
+**The plugin grows a face: two switches on its Plugins-page card, and the details stay with the
+Agent.**
+
+### Added
+- **Configuration card on the plugin's bundle page** (`Plugins → dsh-subagent-guard`), rendered
+  between the description and the component list. It exposes exactly two human decisions:
+  - **Tool-face interception** (`enforceToolFace`): whether the tool surface a parent Agent passes
+    to `delegate` is enforced. Off means the parent's `tools` is ignored — except an explicit
+    `tools: []`, which is the strictest request and always honoured. Without a deployment ceiling
+    the child inherits the parent's full surface; with `enforceMaxTools: true` the whitelist still
+    applies. `persona` and the guidance section still apply.
+  - **Permission interception** (`enforceSandbox`): whether the sandbox ceiling
+    (`subagentSandboxCap`) is applied. Off means the child follows the parent's own mode.
+  Both fields are `volatile`, so a click writes the profile patch and takes effect immediately —
+  no restart. Everything else (deny patterns, tool lists, script inspection) stays in
+  `cordis.patch.yml` and is Agent-editable on purpose; `AGENTS.md` documents the split.
+- **Browser half** (`lib/client.js`), a plain no-build client module: it registers into the
+  `plugins.bundle.config` slot (keyed by the bundle name) through `ctx.slots.inject`, and reads /
+  writes the entry's settings form via `ctx.configForms`.
+
+### Fixed
+- **Volatile fields are references, not values.** `.volatile()` makes the Loader hand the plugin a
+  `Volatile<T>` whose value is read through `.get()`. Comparing `config.enforceToolFace === false`
+  is silently always false there — the card could be switched off while the gate kept enforcing.
+  Reads now go through `flagOf()`, and two regressions cover the reference shape.
+- **`tools: []` was widened, not honoured (red-4 R2, fail-open).** With the switch off, every
+  `tools` value was dropped — including the empty array, so a parent asking for *no tools* handed
+  the child the deployment's whole whitelist. The empty array now always applies.
+- **A deployment ceiling still binds when the switch is off (red-4 R3).** The documented promise
+  said "inherits the parent's full surface", which is only true without `enforceMaxTools`; with a
+  whitelist the child gets the whitelist. Both the code path and the docs now say so, and the
+  derived-channel note is scoped to the no-ceiling case.
+
+### Tests
+- **129 cases** (19 + 21 + 29 + 43 + 7 + 10): two new gate-1/gate-3 cases for the switches, two for
+  the volatile reference shape, two for the red-4 cases above.
+
+### Verified on the harness
+- `enforceToolFace: false` **without** a deployment ceiling → child `request/header` carries the
+  parent's surface (**26 tools**) instead of the restricted `read`; control run keeps 1. With
+  `enforceMaxTools: true` the ceiling still binds: `maxTools: [read, glob]` produced a child with
+  exactly those **2** tools, and `tools: []` produced **zero**.
+- `enforceSandbox: false` with `subagentSandboxCap: read-only` → the child's session has no
+  guard-written `sandbox/mode` event; control run appends `read-only`.
+
 ## [0.4.7] — 2026-10-31
 
 **Third audit pass: the gate-3 heterogeneous red team that failed to produce anything in 0.4.6

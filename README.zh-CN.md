@@ -176,6 +176,23 @@ dsh plugin add dsh-subagent-guard
 
 ## 配置
 
+### 卡片：人只需要碰这两个开关
+
+打开 **插件 → dsh-subagent-guard**，在「描述」和「包含的组件」之间有这张卡片：
+
+| 开关 | 字段 | 关掉之后 |
+|---|---|---|
+| 工具面拦截 | `enforceToolFace` | 父 Agent 传给 `delegate` 的 `tools` 不再生效——但显式的 `tools: []` 除外（零工具是最严的请求，永远照办）。没有部署上限时子代理继承父会话完整工具面；**有 `enforceMaxTools: true` 时部署白名单照样生效**。`persona` 与说明段落照常施加。派生通道的封锁只在「没有部署上限」时才会一起放开：不受限的子代理可以再派孙代理，所以只在你信任整条链时关它。 |
+| 权限拦截 | `enforceSandbox` | 沙箱硬顶整个跳过，子代理完全跟随父会话档位。 |
+
+两个字段都是 `volatile`：点一下就把值写进 profile patch 并**立即生效**，不用重启。要彻底停用
+这个插件，用卡片上方的 bundle 开关，而不是第三个设置项。
+
+其余细节（黑名单规则、工具清单、脚本检查）**故意不放上卡片**——那是 Agent 在你的会话里改的
+东西，分工与文件位置写在 `AGENTS.md`。
+
+### 文件层
+
 写在 bundle 的 `cordis.patch.yml` 里，或在 profile 里按 `id` 覆盖：
 
 ```yaml
@@ -184,6 +201,8 @@ dsh plugin add dsh-subagent-guard
       name: dsh-subagent-guard
       config:
         enabled: true
+        enforceToolFace: true
+        enforceSandbox: true
         # 子代理沙箱硬顶：inherit | read-only | workspace-write | danger-full-access
         subagentSandboxCap: workspace-write
         # all = 父会话与子代理都拦；subagent = 只拦子代理
@@ -231,6 +250,19 @@ dsh plugin add dsh-subagent-guard
 
 ## 已知边界
 
+- **两个开关是人的决定，不是权限边界。** 任何持有已登录 Web 会话的人都能改；而拿到了浏览器
+  操作工具（`ego_*`）的子代理就跑在同一个会话里——所以这类 Agent 可以自己去把拦截关掉。三道闸
+  是逐次工具调用执行的，开关本身并不防「被闸关住的那个 Agent」。给子代理授 `ego_*` 前请想清楚。
+- **关掉「权限拦截」不只是跳过硬顶。** 那次提前返回同时跳过三条 fail-closed 分支（`sandboxPolicy`
+  缺失、`overrideOf` 抛错、未登记档位），也不改变审批口径。「完全跟随父会话」只描述沙箱档位。
+- **开关翻转不落会话日志。** 插件在启动时打一次生效值、跳过硬顶时告警，但 Loader 的 volatile
+  更新不产生审计事件。
+- **卡片绑的是 bundle 的 profile entry id。** 页面按 settings 命名空间 `dsh-subagent-guard`
+  （也就是 bundle patch 里的那行 id）去找配置；把插件注册成别的 row id 时，卡片会显示但读不到
+  也写不进两个开关。保持自带的 id。
+- **一次设置写入会把整份生效配置落进你的 profile patch。** 这是宿主的 settings 写入行为，不是
+  本插件：第一次点开关之后，patch 里可能出现所有默认值（包括一台机器专属的 `maxTools` 清单）。
+  不影响功能，但噪音大，提交 profile 前值得看一眼。
 - **文本匹配，不是系统调用沙箱。** `run_code`、`node -e`、内联求值（`pwsh -c "…"`）、
   多层脚本链都不在检查范围——闸一（沙箱档位）才是这层的兜底。
 - **间接执行是尽力而为。** 0.4.7 起路径提取也能认出 `cmd /c "pwsh -File x.ps1"`、
@@ -323,15 +355,15 @@ dsh plugin add dsh-subagent-guard
 ## 测试
 
 ```bash
-npm test   # 六个套件，123 条用例，全部脱离宿主
+npm test   # 六个套件，129 条用例，全部脱离宿主
 ```
 
 | 套件 | 条数 | 覆盖面 |
 |---|---|---|
 | `guard.test.mjs` | 19 | 规则层：正则、命令归一化、脚本路径（含引号内分隔符与 `cmd /c` 子命令）、深度、档位强弱 |
 | `policy.test.mjs` | 21 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
-| `apply.test.mjs` | 27 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
-| `delegate.test.mjs` | 39 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
+| `apply.test.mjs` | 29 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
+| `delegate.test.mjs` | 43 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
 | `regressions.test.mjs` | 7 | YAML 引号、pending 清理、上限交集 |
 | `audit-20261028.test.mjs` | 10 | 审计发现里凡能脱离宿主钉住的部分 |
 
@@ -347,3 +379,5 @@ npm test   # 六个套件，123 条用例，全部脱离宿主
 ## 许可证
 
 MIT — 见 [LICENSE](./LICENSE)。
+
+
