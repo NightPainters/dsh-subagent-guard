@@ -26,7 +26,17 @@ function makeCtx({ override, defaultMode = 'danger-full-access' } = {}) {
       error: (m) => logs.push(['error', m]),
     }),
     on: (event, fn) => {
-      listeners[event] = fn
+      // 真 ctx 支持同一事件挂多个监听（闸一的封顶 + 冷恢复各一个）；桩早期写成
+      // 「后注册覆盖先注册」，会把前一个监听整个吞掉、制造假红。这里用分发器保持
+      // 调用点 `listeners['agent/created']({ agent })` 不变。
+      const previous = listeners[event]
+      listeners[event] =
+        previous === undefined
+          ? fn
+          : (...args) => {
+              previous(...args)
+              fn(...args)
+            }
     },
     effect: (fn) => {
       const disposer = fn()
@@ -152,6 +162,17 @@ test('闸一：读取档位抛错时 fail-closed，补压到 read-only', () => {
   assert.doesNotThrow(() => listeners['agent/created']({ agent }))
   assert.deepEqual(appended, [['sandbox/mode', { mode: 'read-only' }]], '读不到档位必须压到 read-only')
   assert.ok(logs.some(([lvl]) => lvl === 'error'), '必须以 error 级别留痕')
+})
+
+test('闸一（F-06）：未登记的档位名压到 read-only，不压到部署 cap', () => {
+  // 2026-10-31 红队审计：三条「不知道多宽」的路径必须一致。cap 默认是
+  // workspace-write，宿主若新增一个比它更严的档位，压到 cap 就是放宽。
+  const { ctx, listeners, logs } = makeCtx({ override: 'strict-readonly' })
+  apply(ctx, { ...baseConfig })
+  const { agent, appended } = makeAgent(1)
+  listeners['agent/created']({ agent })
+  assert.deepEqual(appended, [['sandbox/mode', { mode: 'read-only' }]])
+  assert.ok(logs.some(([, m]) => m.includes('未登记的沙箱档位')))
 })
 
 test('闸一：写入档位抛错时用 error 留痕，不炸宿主', () => {
@@ -289,6 +310,56 @@ test('闸二：脚本旁路——干净的脚本放行', () => {
   }
 })
 
+// R3（2026-10-31 对抗审计）：Windows 忽略尾随的点，`pwsh -File evil.ps1.` 真的
+// 会执行 `evil.ps1`；旧实现的扩展名判定对 `<path>.` 失败 ⇒ 脚本内容静默不检查。
+test('闸二：脚本路径带尾随点（evil.ps1.）仍然检查内容并拒绝', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'evil.ps1')
+    writeFileSync(script, 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `pwsh -File "${script}."` },
+      agent,
+      cwd: dir,
+    })
+    assert.equal(typeof reason, 'string', '尾随点不能成为跳过内容检查的旁路')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// R5（2026-10-31 对抗审计）：旧实现把超限脚本按「读不到」放行 —— 把脚本写大过
+// 阈值即可让内容检查静默失效。现在超限必须拒绝。
+test('闸二：超过 maxScriptBytes 的脚本拒绝执行，而不是静默放行', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'big.ps1')
+    writeFileSync(script, `Get-Date\n${'# padding\n'.repeat(40)}`, 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, maxScriptBytes: 64, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `pwsh -File "${script}"` },
+      agent,
+      cwd: dir,
+    })
+    assert.equal(typeof reason, 'string', '内容未检查的脚本不能放行')
+    assert.match(reason, /maxScriptBytes/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('闸二：脚本旁路可关闭', () => {
   const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
   try {
@@ -321,4 +392,145 @@ test('depthOf 在判不清时 fail-closed 当作子代理', () => {
   assert.equal(depthOf({ options: {}, session: { header: { delegationDepth: 3 } } }), 3)
   assert.equal(depthOf({ options: { subagentDepth: 5 }, session: { header: { delegationDepth: 1 } } }), 5)
   assert.equal(depthOf({}), 1, '读不到深度时必须当子代理')
+})
+
+// ---- F-A：闸一必须在事件发生时取服务 -------------------------------------
+
+test('F-A：sandboxPolicy 晚注册（apply 时还不可见）也不能把子代理抬到 cap', () => {
+  // 真实宿主时序（测试台探针实测）：apply() 执行时 `sandboxPolicy` 还没注册，
+  // `agent/created` 触发时才可见。旧实现把 `ctx.get('sandboxPolicy')` 的值存在
+  // apply() 的闭包里 → 恒 undefined → 走 fail-closed 分支把子代理**压到** cap，
+  // 而安全方向应该保守：更窄的档位不该被抬宽。
+  const listeners = {}
+  const logs = []
+  const late = {
+    ready: false,
+    service: { overrideOf: () => undefined, defaultMode: 'read-only' },
+  }
+  const ctx = {
+    logger: () => ({
+      info: (m) => logs.push(['info', m]),
+      warn: (m) => logs.push(['warn', m]),
+      error: (m) => logs.push(['error', m]),
+    }),
+    on: (event, fn) => {
+      // 真 ctx 支持同一事件挂多个监听（闸一的封顶 + 冷恢复各一个）；桩早期写成
+      // 「后注册覆盖先注册」，会把前一个监听整个吞掉、制造假红。这里用分发器保持
+      // 调用点 `listeners['agent/created']({ agent })` 不变。
+      const previous = listeners[event]
+      listeners[event] =
+        previous === undefined
+          ? fn
+          : (...args) => {
+              previous(...args)
+              fn(...args)
+            }
+    },
+    effect: (fn) => {
+      fn()
+    },
+    tools: { guard: () => () => {} },
+    // apply 阶段不可见，之后可见 —— 模拟真实的异步服务注册。
+    get: (serviceName) => (serviceName === 'sandboxPolicy' && late.ready ? late.service : undefined),
+  }
+
+  apply(ctx, { ...baseConfig })
+  late.ready = true
+
+  const { agent, appended } = makeAgent(1)
+  listeners['agent/created']({ agent })
+
+  assert.deepEqual(
+    appended,
+    [],
+    'read-only 已经比 workspace-write 更窄，闸一不应该写 sandbox/mode（写=抬高档位）',
+  )
+  assert.ok(!logs.some(([, message]) => message.includes('硬顶')))
+})
+
+test('F-A：事件发生时服务真的缺失，按最窄档位 fail-closed（read-only）', () => {
+  const listeners = {}
+  const ctx = {
+    logger: () => ({ info: () => {}, warn: () => {}, error: () => {} }),
+    on: (event, fn) => {
+      // 真 ctx 支持同一事件挂多个监听（闸一的封顶 + 冷恢复各一个）；桩早期写成
+      // 「后注册覆盖先注册」，会把前一个监听整个吞掉、制造假红。这里用分发器保持
+      // 调用点 `listeners['agent/created']({ agent })` 不变。
+      const previous = listeners[event]
+      listeners[event] =
+        previous === undefined
+          ? fn
+          : (...args) => {
+              previous(...args)
+              fn(...args)
+            }
+    },
+    effect: (fn) => {
+      fn()
+    },
+    tools: { guard: () => () => {} },
+    get: () => undefined,
+  }
+
+  apply(ctx, { ...baseConfig })
+  const { agent, appended } = makeAgent(1)
+  listeners['agent/created']({ agent })
+
+  // 事件时刻仍读不到档位 ⇒ 不知道它多宽，按最窄写；写 cap 对更窄的子代理是放宽。
+  assert.deepEqual(appended, [['sandbox/mode', { mode: 'read-only' }]])
+})
+
+// S2（2026-10-31 异质红队 astra A6）：脚本按固定 `utf8` 解码 —— 带 BOM 的
+// UTF-16LE 脚本解出来是乱码，黑名单全部失配，内容一个字节都没被检查。
+test('闸二：带 BOM 的 UTF-16LE 脚本也要解码后检查并拒绝', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'guard-test-'))
+  try {
+    const script = join(dir, 'utf16.ps1')
+    const payload = 'vssadmin delete shadows /all /quiet\n'
+    writeFileSync(script, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(payload, 'utf16le')]))
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `pwsh -File "${script}"` },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', 'UTF-16LE 脚本必须解码后命中规则')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// S3（2026-10-31 异质红队 astra A8）：相对脚本路径的候选顺序必须以**会话 cwd**
+// 为准；旧实现按宿主进程 cwd 先解析，同名文件会遮蔽会话里真正要执行的脚本。
+test('闸二：相对脚本路径按会话 cwd 解析，进程 cwd 的同名文件不能遮蔽', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const procDir = mkdtempSync(join(tmpdir(), 'guard-proc-'))
+  const prev = process.cwd()
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n')
+    writeFileSync(join(procDir, 'x.ps1'), 'Get-Date\n')
+    process.chdir(procDir)
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1, 'sess-1')
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: 'pwsh -File x.ps1' },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', '会话 cwd 里的脚本才是被执行的那个')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    process.chdir(prev)
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(procDir, { recursive: true, force: true })
+  }
 })

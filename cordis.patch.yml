@@ -149,6 +149,6 @@
         # persona 段落在 system prompt 里的位置与名字（同名会遮蔽全局同名段落）。
         sectionOrder: 120
         sectionName: "subagent-guard:persona"
-        # 把「登记策略 → 创建子代理 → 核对认领」串行化。官方允许 50 个并发子代理，
+        # 把「登记策略 → 创建子代理 → 核对认领」串行化。并发子代理默认上限 8（maxActiveSubagents 可配），
         # 策略按父会话 FIFO 认领；不串行可能把 A 的策略绑到 B 的子代理上。
         serializeBind: true

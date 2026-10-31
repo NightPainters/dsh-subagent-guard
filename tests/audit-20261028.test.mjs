@@ -36,6 +36,15 @@ test('F5 一条命令里的多个脚本全部被认出来', () => {
   assert.deepEqual(scriptPathsOf('echo nothing'), [])
 })
 
+// R3（2026-10-31 对抗审计）：Windows 忽略尾随的点，`pwsh -File evil.ps1.` 真的
+// 会执行 `evil.ps1`。旧实现的扩展名判定对 `evil.ps1.` 失败，于是脚本内容
+// 一个字节都不检查、直接放行。
+test('R3 尾随点的脚本路径仍被认出（并按归一化后的路径读文件）', () => {
+  assert.deepEqual(scriptPathsOf('pwsh -File evil.ps1.'), ['evil.ps1'])
+  assert.deepEqual(scriptPathsOf('pwsh -File "C:\\work\\evil.ps1."'), ['C:\\work\\evil.ps1'])
+  assert.deepEqual(scriptPathsOf('.\evil.ps1.'), ['.\evil.ps1'])
+})
+
 // --------------------------------------------------------- F9 / F10 / F13 / F11
 
 const base = {
@@ -110,7 +119,16 @@ test('F2 根会话（没有 parentSession）不会被闸一动手', () => {
   const appended = []
   let capturedCreate
   ctx.on = (event, fn) => {
-    if (event === 'agent/created') capturedCreate = fn
+    if (event !== 'agent/created') return
+    // 真 ctx 支持多监听（闸一封顶 + 冷恢复各一个），桩不能只留最后一个。
+    const previous = capturedCreate
+    capturedCreate =
+      previous === undefined
+        ? fn
+        : (...args) => {
+            previous(...args)
+            fn(...args)
+          }
   }
   ctx.get = (name) => {
     if (name !== 'sandboxPolicy') return undefined

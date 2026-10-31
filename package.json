@@ -1,6 +1,6 @@
 {
   "name": "dsh-subagent-guard",
-  "version": "0.4.2",
+  "version": "0.4.7",
   "description": "Three gates for DeepSeek Harness subagents: sandbox ceiling, destructive-command denylist, and a delegation tool that pins each child's tool surface and system prompt",
   "keywords": [
     "dsh",
@@ -32,7 +32,9 @@
     "README.zh-CN.md",
     "LICENSE",
     "tests",
-    "docs",
+    "docs/research",
+    "docs/incidents",
+    "docs/verification",
     "CHANGELOG.md"
   ],
   "repository": {

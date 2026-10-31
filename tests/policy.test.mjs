@@ -143,3 +143,12 @@ test('assertToolName: 常见工具名通过', () => {
     assert.equal(assertToolName(name, 'test'), name)
   }
 })
+
+// T2（2026-10-31 异质红队 opus）：派生工具是「派生通道」不是工具。默认部署
+// `enforceMaxTools: false` 时上限为 null，旧实现把 `tools: ['subagent']` 原样
+// 返回，子代理于是能派一个不受策略约束的孙代理。
+test('resolveAllowedTools: 拒绝把派生工具当授权面（subagent / subagent_fork）', () => {
+  assert.throws(() => resolveAllowedTools(['read', 'subagent'], null), /不能包含派生工具/)
+  assert.throws(() => resolveAllowedTools(['subagent_fork'], null), /不能包含派生工具/)
+  assert.deepEqual(resolveAllowedTools(['read'], null), ['read'])
+})

@@ -4,6 +4,249 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] — 2026-10-31
+
+**Third audit pass: the gate-3 heterogeneous red team that failed to produce anything in 0.4.6
+finally ran (opus), plus a maintainer sweep of the script-inspection surface.**
+
+### Fixed
+- **Quoted sub-commands were mistaken for file paths (M-1, fail-open).** `cmd /c "pwsh -File
+  evil.ps1"` put the *whole quoted sub-command* into the path candidate list; it happens to end
+  in `.ps1`, so it passed the extension check and then resolved to a file that does not exist —
+  which is silently skipped. The real `evil.ps1` was never read. Interpreter look-behind now
+  accepts a quote / `&` / `(`, and `-File` accepts quoted and comma-separated argument lists
+  (M-2: `Start-Process pwsh -ArgumentList "-File evil.ps1"` and the
+  `'-NoProfile','-File','x.ps1'` array form). Quoted strings that start with an interpreter and
+  bare `-`-prefixed tokens are no longer treated as paths.
+- **Cold resume without a request header kept the derived channels (F1, blocking).** When a
+  child's log has our section but no `request/header`, recovery returned the parsed section face
+  as-is. That face can name `subagent` / `subagent_fork`, which bypass `restrict()` and are
+  installed scoped by the host — a recovered child could spawn unconstrained grandchildren. The
+  no-header branch now filters them exactly like the header branch.
+- **`serializeBind: false` dropped the binding mutex (F2).** With the mutex skipped, two
+  concurrent delegations from one parent raced: `agent/created` order belongs to the host while
+  claiming is FIFO per parent session, so a child could claim the *other* call's policy. The
+  option is now ignored (one warning at the first `delegate` call) and every binding is
+  serialized. The mutex covers only the register → create → verify window, so child execution
+  concurrency is unaffected.
+
+### Known limits
+- Script inspection still cannot resolve dynamically built command lines
+  (`Start-Process -ArgumentList @('-File', $p)`, `Invoke-Expression`) — best-effort by design.
+- `serializeBind: false` is deprecated and ignored.
+
+### Tests
+- 123 cases (19 + 21 + 27 + 39 + 7 + 10). New regressions: M-1/M-2 (quoted sub-command and
+  `-ArgumentList` forms resolve to the real script), F1 (no-header recovery drops derived
+  channels), F2 (`serializeBind: false` still binds one-to-one). F1 and F2 were re-verified by
+  reverting each fix in place and watching the new case go red.
+
+## [0.4.6] — 2026-10-31
+
+**Two defects from the second audit pass, one of them a regression introduced by 0.4.5's
+own gate-2 fix.**
+
+### Fixed
+- **Quoted separators split script paths (R2-02, blocking; regression in 0.4.5).** 0.4.5 fixed
+  `pwsh -File a.ps1;pwsh -File b.ps1` by splitting the command on `;` / `&` / `|` before
+  extracting script paths — but the split ignored quoting, so `pwsh -File "C:\work\a;b.ps1"`
+  yielded `b.ps1` instead of the real file. The real script was never read, and an unreadable
+  script is allowed with a warning. Segmentation is now quote-aware (`splitSegments`): a
+  separator inside `"…"` or `'…'` no longer ends the segment.
+- **Unknown sandbox modes were capped to the configured cap, not to `read-only` (F-06).**
+  Three "we cannot tell how wide this is" paths disagreed: a missing `sandboxPolicy` service
+  and a throwing `overrideOf()` both hard-capped to `read-only`, while an **unregistered mode
+  name** went through `shouldCapSandbox` (which treats unknown as widest) and was then written
+  as `subagentSandboxCap`. With the default cap that is `workspace-write`, i.e. a child running
+  in an unknown (possibly wider) mode could be pinned down to a **wider** mode than read-only.
+  All three paths now hard-cap to `read-only`.
+
+### Known limits
+- Gate 3 (the `delegate` tool / cold-resume claim surface) had **no successful heterogeneous
+  red team** this pass: four attempts across opus and grok died mid-run with no output, so that
+  face rests on the 0.4.4 heterogeneous round, the delta review, and unit tests only. Recorded
+  rather than papered over.
+- Two injected canaries were found to be unreachable and are therefore excluded from the
+  recall denominator: dropping the `-f` alias (the generic bare-path branch still catches the
+  file) and dropping the process-cwd candidate (the executing cwd *is* the session cwd, so a
+  file that only exists under the process cwd is never executed anyway).
+
+### Tests
+- 119 cases (18 + 21 + 27 + 36 + 7 + 10). New regressions: F-06 (unknown mode caps to
+  `read-only`) and R2-02 (quoted separators do not split; unquoted ones still do). Both go red
+  against the shipped 0.4.5 bytes.
+
+## [0.4.5] — 2026-10-31
+
+**Twelve more defects, found by the second pass of the adversarial audit: three heterogeneous
+red teams (sonnet / opus / astra, re-run after the model routes recovered) attacking 0.4.4,
+each finding independently re-falsified.** Six are denylist bypasses, four are script-inspection
+bypasses, and two are gate-3 gaps where a child could still be granted a derivation tool.
+
+### Fixed
+- **Denylist was spelling-sensitive (G1–G6).** Command text is now normalized before matching:
+  backtick/caret/backslash line continuations fold to a space, quotes are stripped, and
+  whitespace/newlines collapse. So `shutdown` + newline + `/s`, `"C:\…\shutdown.exe" /s` and
+  `Start-Process shutdown -ArgumentList "-s"` all match the shutdown rule (which now accepts
+  dash flags and only the real power-flag letters, so `Get-Help shutdown -examples` is
+  unaffected). `format.com C:` matches like `format C:`; `reg delete HKEY_LOCAL_MACHINE\…`
+  now matches like `HKLM` (all five root keys accepted).
+- **Script inspection bypasses (S1–S4).** The command is split on `;` `&` `|` and newlines
+  *before* extracting targets, so `pwsh -File a.ps1;pwsh -File b.ps1` inspects both. Content
+  is decoded by BOM (`FF FE` UTF-16LE, `FE FF` UTF-16BE, `EF BB BF` UTF-8) with a NUL-ratio
+  UTF-16LE fallback, instead of assuming UTF-8. Relative paths resolve against the **session
+  cwd first**, and *every* existing candidate is inspected — a same-named file in the process
+  cwd can no longer shadow the real target. Explicit interpreters (`bash ./payload`) get their
+  extension-less, path-shaped targets inspected too.
+- **Cold-resume parsing was not structurally anchored (C1).** The `可用工具：` line is now
+  taken from the last match **before** the fixed scope marker (host sections ordered 1000+
+  follow it), and the result is **intersected** with the `request/header` surface: either
+  source can veto. `subagent` / `subagent_fork` are dropped on both sides.
+- **A non-string session id could pin the literal `"undefined"` key (C3, T1).** `applyPolicy`
+  now refuses to bind (`fail-closed`) and logs an error instead of writing a key that would
+  make the whole fallback table allow every tool.
+- **Gate 3 accepted derivation tools as an authorized face (T2).** `resolveAllowedTools` now
+  rejects `subagent` / `subagent_fork` before the deployment cap is applied, so a parent can
+  no longer grant them explicitly; the pinned set filters them as defense in depth, keeping
+  the "no derivation channel" paragraph true.
+- **Cold resume had no host-capability check (C2).** Startup probes for `agents.resume` and
+  warns once when the host cannot cold-resume at all; the precondition is documented.
+
+### Known limits
+- Intersecting surfaces can **over-narrow**: an agent-scoped tool absent from that particular
+  request header is dropped (fewer tools, never more).
+- `provider: 'fork'` children are restored from the parent's historical paragraph surface
+  (over-restriction).
+- Dynamically built commands (base64 / `-EncodedCommand`, variable paths, `node -e`, scripts
+  running scripts) remain outside static matching.
+- `serializeBind: false` can swap policies between concurrent delegations (DoS, not escalation).
+- A `fork`/`subagent` child created outside a `delegate` window is not pinned; gate 1 still caps
+  its sandbox.
+
+### Tests
+117 cases across six suites (17 / 21 / 26 / 36 / 7 / 10), all host-free. The nine new
+regressions were run against the 0.4.4 bytes (kept in a scratch tree) and fail there, so they
+are not tautologies.
+
+## [0.4.4] — 2026-10-31
+
+**Seven defects that 0.4.3 introduced or left open, all found by the adversarial audit
+(`plans/WORKFLOW-对抗审计2.0-20261008.md`: canaries → three red teams → per-finding
+falsification → delta review). Three are fail-open paths in gate 2, three are cold-resume
+holes (one of them a regression in the 0.4.3 fix itself), and one is a gate-1 branch that
+could widen.**
+
+### Fixed
+- **Cold resume trusted the model-visible face (R1-01, blocking).** 0.4.3 rebuilt the pinned
+  surface from the earliest `request/header`'s `tools` — but that is what the *model* sees,
+  not what was authorized. The official `dsh-tool-subagent` installs `subagent` /
+  `subagent_fork` as agent-scoped registrations, which bypass `tools.restrict()` and therefore
+  appear in the header; a pinned child was consequently allowed to call `subagent` after a
+  restart and could spawn an **unrestricted grandchild**. The authoritative source is the
+  paragraph this plugin itself writes: the `可用工具：<list>` line in the same
+  `system/message` as the scope marker. It is now parsed (last match wins, so a caller-supplied
+  persona cannot poison it), and only logs without that line fall back to the header — with
+  the two scoped derivation tools removed.
+- **Trailing-dot script paths bypassed content inspection (R3).** Windows ignores a trailing
+  dot, so `pwsh -File evil.ps1.` really executes `evil.ps1` (verified on the host), but the
+  extension test rejected `evil.ps1.` and the file was never read. Paths are now normalized
+  before classification and read through the normalized form.
+- **Oversized scripts were silently allowed (R5).** Exceeding `maxScriptBytes` used to return
+  "unreadable", which the caller treats as "allow with a warning" — writing a bigger script
+  was enough to switch content inspection off. Oversized scripts are now refused with a
+  message that names the limit; raise `maxScriptBytes` to allow them.
+- **A forked child could adopt the parent's historical header (R1-02).** `provider: 'fork'`
+  seeds the child's log with the parent's history, so an early `request/header` may describe
+  the parent's surface. Only headers that come **after** the scope paragraph are now
+  considered; a header that predates it is ignored, which falls back to the empty surface
+  (fail-closed).
+- **The anti-hijack window in gate 2 never ran, and would have misfired if it had (F8,
+  R2-X1).** The check that refuses an official `subagent` call while a `delegate` policy is
+  unclaimed sat *after* the "no command argument ⇒ return" early exit — official `subagent`
+  has no command field, so it was dead code and two delegations in one turn could still steal
+  each other's policy. It was also gated on the global `pending.size > 0`, so making it
+  reachable would have rejected healthy `subagent` calls from **every other session**. It now
+  runs before the early exit and compares the caller's own session id.
+- **Delegation diagnostics could describe the wrong child (audit finding 7).** An unclaimed
+  `agent/created` during the delegation window — typically the official `subagent` creating a
+  child first — overwrote the in-memory trace, so a real fail-closed error could report
+  *another* child's parent session and "claim = hit, bind = success". The trace is now written
+  only by the claiming child; an unclaimed birth just makes the message say a foreign child
+  landed in the window.
+- **`enableDelegateTool: false` also turned off cold-resume recovery (audit finding A).** The
+  early return that skips gate 3 sat *before* the `agent/created` claim/recovery listener, so
+  disabling the delegation tool left the suppression guard with an empty `pinned` map: a child
+  woken by `send_message` came back to the full inherited surface and nothing denied it
+  (fail-open). The recovery listener now registers unconditionally — recovery belongs to gate 2,
+  not gate 3 — and runs even when the delegation tool is off.
+- **A missing `sandboxPolicy` service wrote `subagentSandboxCap`, which can widen (R1-04).**
+  With the service absent we cannot know the child's current mode, and writing the cap to a
+  child that was **narrower** than the cap (e.g. `read-only`) is an upgrade — the opposite of
+  the documented "downgrade only". That branch now writes `read-only`. Unreachable in the
+  audited deployment (the service is resident and the executor tools inject it), but the code
+  now matches the promise.
+
+### Known limits
+- A guard-created child that died **before its first request** has no scope paragraph and no
+  request header, so it is not identified as this plugin's on resume: it comes back with the
+  inherited surface. That window is narrow (the child never ran a turn) and was observed zero
+  times among real delegations; the previous wording ("restored with an empty surface")
+  described only the marked-but-headerless case.
+- The scope marker lives in the same text as a caller-supplied `persona`; a persona that
+  copies both the marker and the `可用工具` line could masquerade as a guard-created child.
+  The caller already chooses the tool list, so this is not an escalation path, but it is why
+  the parser takes the last match and never trusts the header alone.
+
+### Tests
+- `apply.test.mjs`: trailing-dot path is inspected and denied; an oversized script is denied.
+- `audit-20261028.test.mjs`: `scriptPathsOf` normalizes trailing dots.
+- `delegate.test.mjs`: cold resume prefers the `可用工具` line over a header that lists
+  `subagent`; the header-only fallback drops the scoped derivation tools.
+
+## [0.4.3] — 2026-10-31
+
+**Two defects that the unit suite could not see, both found by running the plugin on a
+real host and reading host-side evidence (session logs, files on disk, exit codes) instead
+of the child's own report.**
+
+### Fixed
+- **Gate 1 was widening, not capping (F-A).** `sandboxPolicy` was read once in the plugin's
+  `apply()`, where the service is not registered yet: a probe plugin measured every
+  relevant service as `undefined` during `apply`, becoming visible ~300 ms later. The
+  snapshot was therefore always `undefined`, the fail-closed branch always fired, and the
+  child was forced to `subagentSandboxCap` regardless of its current mode — so a
+  `read-only` parent with a `workspace-write` cap produced a child that **wrote to disk**,
+  while the `cap: inherit` control was correctly refused by the read-only sandbox. The
+  service is now read inside the `agent/created` handler; a mode that is still unreadable
+  at event time keeps the old fail-closed behaviour. This also revives the
+  `overrideOf`/`shouldCapSandbox` path, which had been dead code.
+- **Cold resume lost the pinned surface entirely (F-B).** `pinned` is an in-memory map, and
+  `restrict()` / the scoped guard die with the process. After a host restart, a child woken
+  by `send_message` came back with 26 tools instead of 1 and really did spawn a shell to
+  write `coldresume-escaped2.txt`; the global fallback guard found no record and allowed
+  everything. DSH offers no third-party write path for custom session events (an unknown
+  type without `ignorable` makes the whole session unreadable), so the plugin now rebuilds
+  the surface from the child's **own log**: the fixed scope paragraph in `system/message`
+  identifies a guard-created child with an explicit tool list, and the earliest
+  `request/header`'s `tools` is the surface that was in effect. It then re-applies
+  `restrict`, re-registers the scope section, and re-pins the child on every
+  `agent/created` that has no pending policy.
+
+### Known limits
+- The caller-supplied `persona` cannot be separated from the same `system/message`, so a
+  restored child's section states only its tool surface.
+- A guard-created child whose log has no `request/header` (no request was ever issued) is
+  restored with an **empty** surface, fail-closed.
+- The restore path relies on the exact text of the scope paragraph; a future version that
+  changes that text must keep a stable marker (see `ABSENT_CHANNELS_NOTE`).
+
+### Tests
+- `apply.test.mjs`: two cases pin the service-late-registration timing of gate 1 (one
+  asserting no widening, one that a genuinely absent service still caps).
+- `delegate.test.mjs`: three cases cover cold-resume restore (rebuild, non-guard child left
+  alone, marker without a request header falls back to an empty surface). Both F-A and F-B
+  regressions fail against 0.4.2's `lib/index.js` and pass against this one.
+
 ## [0.4.2] — 2026-10-29
 
 **0.4.1 shipped two misreports of its own. Both surfaced by running it on the real host

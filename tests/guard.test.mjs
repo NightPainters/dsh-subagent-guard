@@ -9,7 +9,9 @@ import {
   commandOf,
   compileRules,
   matchCommand,
+  normalizeCommand,
   scriptPathOf,
+  scriptPathsOf,
   shouldCapSandbox,
   skipByScope,
 } from '../lib/rules.js'
@@ -135,4 +137,76 @@ test('scriptPathOf 只从明确的脚本执行形式里抠路径', () => {
   assert.equal(scriptPathOf('pwsh -c "Get-Date"'), undefined)
   assert.equal(scriptPathOf('bash -c whoami'), undefined, '`-c` 不是脚本文件')
   assert.equal(scriptPathOf('echo vssadmin delete shadows'), undefined)
+})
+
+// ---- 2026-10-31 异质红队补测（0.4.5）----------------------------------------
+
+test('G1/G2/G3：关机重启的破折号、引号隔断与 Start-Process 前缀都要拦', () => {
+  for (const cmd of [
+    'shutdown -s -t 0',
+    'shutdown -r',
+    '"C:\\Windows\\System32\\shutdown.exe" /s',
+    'Start-Process shutdown -ArgumentList "-s"',
+    'cmd /c shutdown /r',
+  ]) {
+    assert.ok(hit(cmd), `应拦：${cmd}`)
+  }
+  // 只认真实开关字母：帮助/列表类命令不能被误伤
+  assert.equal(hit('Get-Help shutdown -examples'), undefined)
+  assert.equal(hit('shutdown /?'), undefined)
+})
+
+test('G4/G5：format.com 与 reg 的长根键名', () => {
+  assert.ok(hit('format.com C: /q'), 'format.com 与 format 等价')
+  assert.ok(hit('reg delete HKEY_LOCAL_MACHINE\\SOFTWARE\\X /f'))
+  assert.ok(hit('reg.exe delete "HKCU\\Software\\X" /f'))
+  assert.ok(hit('reg delete HKEY_USERS\\.DEFAULT\\X /f'))
+  assert.equal(hit('reg query HKLM\\SOFTWARE'), undefined, '查询不是删除')
+})
+
+test('G6：反引号 / caret / 反斜杠续行不能拆开关键字与动作', () => {
+  assert.ok(hit('vssadmin `\n  delete shadows /all /quiet'))
+  assert.ok(hit('vssadmin ^\ndelete shadows /all'))
+  assert.ok(hit('vssadmin \\\ndelete shadows /all'))
+  assert.equal(normalizeCommand('vssadmin `\ndelete  shadows'), 'vssadmin delete shadows')
+})
+
+test('S1/S4：紧贴分隔符的脚本链、无扩展名解释器目标', () => {
+  assert.deepEqual(scriptPathsOf('pwsh -File a.ps1;pwsh -File b.ps1'), ['a.ps1', 'b.ps1'])
+  assert.deepEqual(scriptPathsOf('pwsh -File a.ps1&pwsh -File b.ps1'), ['a.ps1', 'b.ps1'])
+  assert.deepEqual(scriptPathsOf('bash ./payload'), ['./payload'], '无扩展名也是脚本')
+  assert.deepEqual(scriptPathsOf('bash -c "echo hi"'), [], '`-c` 的实参不是文件')
+  assert.deepEqual(scriptPathsOf('sh /tmp/x'), ['/tmp/x'], '显式解释器 + 路径形状，没有扩展名也要查')
+})
+
+test('R2-02：引号里的分号/与号不是语句分隔符', () => {
+  // 2026-10-31 红队审计：直接 split 会把 "C:\work\a;b.ps1" 切成两半，
+  // 真实脚本永远读不到（读不到 = 放行），文件名叫 a;b.ps1 是合法的。
+  assert.deepEqual(scriptPathsOf('pwsh -File "C:\\work\\a;b.ps1"'), ['C:\\work\\a;b.ps1'])
+  assert.deepEqual(scriptPathsOf('pwsh -File "C:\\work\\a&b.ps1"'), ['C:\\work\\a&b.ps1'])
+  // 引号外的分隔符照旧切段：第二个脚本必须仍然被找出来。
+  assert.deepEqual(scriptPathsOf('pwsh -File "C:\\work\\a;b.ps1";pwsh -File evil.ps1'), [
+    'C:\\work\\a;b.ps1',
+    'evil.ps1',
+  ])
+})
+
+test('M-1/M-2：引号内的子命令 / Start-Process 参数列表也要解析出脚本', () => {
+  // 2026-10-31 维护者复核：旧实现把「引号里的整段子命令」当成一个文件路径
+  // （`"pwsh -File evil.ps1"` 恰好以 `.ps1` 结尾），于是去读一个不存在的文件，
+  // 读不到就 warn + 放行 —— 而 cmd.exe 会真的把 evil.ps1 跑起来，内容零检查。
+  assert.deepEqual(scriptPathsOf('cmd /c "pwsh -File evil.ps1"'), ['evil.ps1'])
+  assert.deepEqual(scriptPathsOf('cmd /c "powershell -File evil.ps1"'), ['evil.ps1'])
+  assert.deepEqual(scriptPathsOf('Start-Process pwsh -ArgumentList "-File evil.ps1"'), ['evil.ps1'])
+  assert.deepEqual(scriptPathsOf("Start-Process pwsh -ArgumentList '-NoProfile','-File','evil.ps1'"), [
+    'evil.ps1',
+  ])
+  assert.deepEqual(scriptPathsOf('bash -c "bash evil.sh"'), ['evil.sh'])
+  // 合法带空格的路径不能被当成命令跳过。
+  assert.deepEqual(scriptPathsOf('& "C:\\Program Files\\x\\evil.ps1"'), [
+    'C:\\Program Files\\x\\evil.ps1',
+  ])
+  // 放宽前沿不能误伤：没有脚本的普通命令仍返回空。
+  assert.deepEqual(scriptPathsOf('Get-ChildItem -Force'), [])
+  assert.deepEqual(scriptPathsOf('Write-Host "bash foo"'), [])
 })
