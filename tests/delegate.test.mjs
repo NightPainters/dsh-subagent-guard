@@ -234,7 +234,7 @@ test('delegate 把 tools 收窄成 restrict，把 persona 注册成 system promp
 
   assert.equal(value.kind, 'delegation')
   assert.equal(value.subagentId, 'child-1')
-  assert.deepEqual(value.tools, ['read', 'grep'])
+  assert.deepEqual(value.tools, ['read', 'grep', 'list_subagent_models'])
   assert.equal(value.personaApplied, true)
 
   assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }])
@@ -249,7 +249,7 @@ test('模型请求在白名单内 ⇒ 原样施加', async () => {
   apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'grep'] }))
   const value = await callDelegate(h, { description: '审查', prompt: 'x', tools: ['read', 'grep'] })
 
-  assert.deepEqual(value.tools, ['read', 'grep'])
+  assert.deepEqual(value.tools, ['read', 'grep', 'list_subagent_models'])
   assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }])
 })
 
@@ -284,12 +284,12 @@ test('模型请求超出部署上限 ⇒ 抛错且不创建子代理（不静默
   assert.equal(h.calls.activations.length, 0, '抛错时不应创建子代理')
 })
 
-test('模型没传 tools + 部署上限为空数组 ⇒ 子代理一个工具都拿不到', async () => {
+test('模型没传 tools + 部署上限为空数组 ⇒ 子代理拿不到任何业务工具（只剩 scoped 的 list_subagent_models）', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: [] }))
   const value = await callDelegate(h, { description: '仅审查', prompt: 'x' })
 
-  assert.deepEqual(value.tools, [])
+  assert.deepEqual(value.tools, ['list_subagent_models'])
   assert.deepEqual(h.calls.restrict, [{ allow: [] }])
 })
 
@@ -301,11 +301,37 @@ test('部署上限含 workflow 且不传 tools ⇒ restrict、段落、guard 三
   apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'workflow'] }))
   const value = await callDelegate(h, { description: '只读', prompt: 'x' })
 
-  assert.deepEqual(value.tools, ['read'], '返回给调用方的授权面也不含 workflow')
+  assert.deepEqual(value.tools, ['read', 'list_subagent_models'], '返回给调用方的授权面也不含 workflow')
   assert.ok(!h.calls.restrict[0].allow.includes('workflow'), 'restrict 不得接受 workflow')
   assert.doesNotMatch(h.calls.sections[0].text, /workflow/, 'system prompt 段落不得声明 workflow')
   assert.equal(h.calls.guards[0]({ name: 'read' }), undefined)
   assert.match(h.calls.guards[0]({ name: 'workflow' }), /不在该子代理的授权工具面内/)
+})
+
+// §1（2026-11-03）：状态行报的是**授权面**，不是请求面。
+// 授权面 = 请求面剔除派生通道 ∪ SAFE_SCOPED_TOOLS（后者由宿主 scoped 注册，
+// 调用方点不到，但它确实可调用）。判据：状态行数字 == 执行期守卫允许的工具数。
+test('§1：cap-default 的状态行报授权面数量，不再自称「白名单工具」', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'workflow'] }))
+  const value = await callDelegate(h, { description: '只读', prompt: 'x' })
+  const text = h.getTool().output.render({}, value)[0].text
+
+  // 2 = read + list_subagent_models（workflow 在 resolveAllowedTools 源头就剔了，不计）
+  assert.match(text, /全部 2 个授权工具/, 'cap-default 分支要报授权面数量')
+  assert.equal(text.includes('白名单工具'), false, '授权面不能再叫「白名单工具」')
+})
+
+// 注：显式传入派生通道不会走到「剔除」这条路——`resolveAllowedTools` 在入口
+// 直接抛错（`delegate 的 tools 不能包含派生工具`）。所以状态行的授权面里
+// 派生通道只可能是「本来就没有」，不需要单列。
+test('§1：显式 tools 的状态行也报授权面（比请求多出 scoped 的那一个）', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const value = await callDelegate(h, { description: '审查', prompt: 'x', tools: ['read'] })
+  const text = h.getTool().output.render({}, value)[0].text
+
+  assert.match(text, /2 个：read, list_subagent_models/)
 })
 
 test('只传 prompt 时不施加任何策略（保持与官方 subagent 一致的默认行为）', async () => {
@@ -384,7 +410,7 @@ test('创建失败时不会把策略留在队列里污染下一次委派', async
   // 第二次：恢复正常，策略必须干净地绑定
   h.ctx.subagents.startActivation = original
   const value = await callDelegate(h, { description: 'b', prompt: 'y', tools: ['grep'] })
-  assert.deepEqual(value.tools, ['grep'])
+  assert.deepEqual(value.tools, ['grep', 'list_subagent_models'])
   assert.deepEqual(h.calls.restrict, [{ allow: ['grep'] }])
 })
 
@@ -411,7 +437,7 @@ test('F3：认领失败（agent/created 未触发）后，策略不残留到下�
     return { childId: 'child-1', messageId: 'msg-2', spec }
   }
   const value = await callDelegate(h, { description: 'b', prompt: 'y', tools: ['grep'] })
-  assert.deepEqual(value.tools, ['grep'])
+  assert.deepEqual(value.tools, ['grep', 'list_subagent_models'])
   assert.deepEqual(h.calls.restrict.at(-1), { allow: ['grep'] }, '不得复用到上一次残留的策略')
 })
 
@@ -452,7 +478,7 @@ test('maxTools 收窄成空集合时 guard 拒绝业务工具，但放行 scoped
   const h2 = makeHarness()
   apply(h2.ctx, withDefaults())
   const value = await callDelegate(h2, { description: '无工具', prompt: 'x', tools: [] })
-  assert.deepEqual(value.tools, [])
+  assert.deepEqual(value.tools, ['list_subagent_models'])
   // `restrict()` 管不到 scoped 注册，`list_subagent_models` 始终可见，guard 放行它。
   // 真机实测（2026-10-29，0.2.1-rc.2）：子代理**没有**注册 `task_begin` / `task_end`，
   // 所以它们不再豁免 —— 否则拒绝消息会把两个幽灵工具说成"可用"。
@@ -640,11 +666,14 @@ test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦�
 
   // 闸二的黑名单 guard 也注册在插件 ctx 上，所以按"它是否拦 subagent"来认人，
   // 不按数组下标 —— 下标会随闸二是否启用、注册顺序变化而漂移。
+  //
+  // 2026-11-03（BACKLOG §2）：来源文案已分流。这条用例走的是**正常派发**、不是
+  // 冷恢复，所以拒绝消息标「同进程绑定」。判据因此不靠来源词认人。
   const bail = h.calls.globalGuards.find((fn) => {
     const verdict = fn({ name: 'subagent', agent: { sessionId: value.subagentId } })
-    return typeof verdict === 'string' && verdict.includes('冷恢复兜底')
+    return typeof verdict === 'string' && verdict.includes('不在该子代理的授权工具面内')
   })
-  assert.ok(bail, '应当注册一条冷恢复兜底的全局 guard')
+  assert.ok(bail, '应当注册一条工具面的全局 guard')
 
   // 父会话不在授权表里 ⇒ 完全不受影响。
   assert.equal(bail({ name: 'pwsh', agent: { sessionId: 'parent-1' } }), undefined)
@@ -658,7 +687,7 @@ test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦�
   )
   // 越权工具：即使 scoped guard 已经不在了，这一层仍然拒绝。
   const denied = bail({ name: 'subagent', agent: { sessionId: value.subagentId } })
-  assert.match(denied, /冷恢复兜底/)
+  assert.match(denied, /同进程绑定/) // 正常派发路径的来源标记（BACKLOG §2）
   assert.match(denied, /不在该子代理的授权工具面内/)
 })
 
@@ -679,7 +708,7 @@ test('白名单含 scoped 注册的工具名时降级收窄，而不是整单 fa
 
   // 委派成功：不再因为一个名字不认识就整单失败。
   assert.equal(typeof value.subagentId, 'string')
-  assert.deepEqual(value.tools, ['read', 'recall', 'tree_read'])
+  assert.deepEqual(value.tools, ['read', 'recall', 'tree_read', 'list_subagent_models'])
 
   // restrict 最终只拿到全局可收窄的那部分（第一次抛错不算落地）。
   assert.equal(h.calls.restrict.length, 1)

@@ -4,6 +4,45 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Two reporting defects from `BACKLOG-0.4.8.md` §1/§2. Neither weakens a gate — but both told the
+caller the wrong story about who stopped what, and one of them is the kind you investigate for an
+hour before realising the message was simply lying.**
+
+### Fixed
+- **The delegation receipt reported the request, not the grant** (§1). `runDelegation` returned
+  `policy.allowTools` — the caller's own list — and `render()` counted that. With
+  `delegate(tools:["read"])` the receipt said "1 tool: read" while the child was actually granted
+  `read` **plus** the host-scoped `list_subagent_models`. It now returns the granted face
+  (`allowTools` minus derived channels, union `SAFE_SCOPED_TOOLS`), and the `cap-default` wording
+  says "all N **granted** tools" instead of "all N whitelisted tools", because "whitelist" was the
+  request-side word.
+  - Not done: a `derivedDropped` field listing the stripped derived channels. It is unreachable on
+    **both** paths — the cap path strips them at the source in `resolveAllowedTools`, and the
+    explicit path throws at the entry (`delegate 的 tools 不能包含派生工具`). Adding the field
+    would require downgrading that throw to a silent strip, which relaxes the security posture and
+    needs its own decision.
+- **The tool-face guard always blamed cold recovery** (§2). `pinned` is populated on **two** paths
+  (normal delegation, and cold recovery rebuilding it from the session log), but the plugin-level
+  guard reported `（delegate 策略，冷恢复兜底）` for both. A freshly delegated child that tripped the
+  guard was told cold recovery had stopped it, which sends whoever reads it looking in the wrong
+  place. A new `pinnedOrigin` map records where each entry came from, and the rejection now says
+  `同进程绑定` / `冷恢复重建` / `冷恢复重建（无 ctx）` (degrading to `来源未登记`), with the same
+  source echoed into the warn log.
+
+### Changed
+- A comment in `lib/index.js` claiming the global guard affects only cold-recovered sessions was
+  simply wrong — normal delegated children are in that table too, and the guard is the first
+  runtime interception on that path. Rewritten.
+- One test name asserted coverage it never had: "冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然
+  拦住越权工具" exercises normal delegation via `callDelegate` and never enters `recoverPolicy`.
+  The assertion now keys on `不在该子代理的授权工具面内` rather than on the source wording, which
+  changes per branch and therefore cannot be used to identify the guard.
+
+### Tests
+- 136 → 138.
+
 ## [0.5.1] — 2026-11-03
 
 **The fourth derived channel: `workflow` was still a way out.**
