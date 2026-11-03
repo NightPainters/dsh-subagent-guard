@@ -30,18 +30,28 @@ hour before realising the message was simply lying.**
   place. A new `pinnedOrigin` map records where each entry came from, and the rejection now says
   `同进程绑定` / `冷恢复重建` / `冷恢复重建（无 ctx）` (degrading to `来源未登记`), with the same
   source echoed into the warn log.
+- **`granted` is deduplicated and the binding log uses the same count as the receipt.** The
+  receipt/status line counted the granted face (`policy.allowTools` minus derived channels, union
+  `SAFE_SCOPED_TOOLS`) without deduplicating a name present in both sources, and the binding log
+  counted the raw `policy.allowTools.length`; with `delegate(tools:["read"])` the receipt said 2
+  while the binding log said 1. Both now use the same deduplicated grant, and the new regression
+  (`请求面只有 read 时，状态行与绑定日志都报授权面的 2 个工具`) goes red when `grantedCount` is
+  reverted to `policy.allowTools.length`. This round also adds two source-state cold-recovery
+  tests: `冷恢复重建的子代理越权调用时，拒绝文案标明「冷恢复重建」` and
+  `冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」`.
 
 ### Changed
 - A comment in `lib/index.js` claiming the global guard affects only cold-recovered sessions was
   simply wrong — normal delegated children are in that table too, and the guard is the first
   runtime interception on that path. Rewritten.
-- One test name asserted coverage it never had: "冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然
-  拦住越权工具" exercises normal delegation via `callDelegate` and never enters `recoverPolicy`.
-  The assertion now keys on `不在该子代理的授权工具面内` rather than on the source wording, which
-  changes per branch and therefore cannot be used to identify the guard.
+- One test name asserted coverage it never had. It exercised normal delegation via `callDelegate`
+  and never entered `recoverPolicy`, yet its name promised cold recovery. It is now named
+  `正常派发的子代理越权调 subagent 时，插件 ctx 上的全局 guard 拦住`, and the assertion keys on
+  `不在该子代理的授权工具面内` rather than on the source wording, which changes per branch and
+  therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 138.
+- 136 → 142 (19 + 21 + 29 + 53 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 

@@ -334,6 +334,50 @@ test('§1：显式 tools 的状态行也报授权面（比请求多出 scoped �
   assert.match(text, /2 个：read, list_subagent_models/)
 })
 
+// 合法反例：只请求 `list_subagent_models` 时，它同时来自请求面与 SAFE_SCOPED_TOOLS。
+// 授权面必须去重（否则状态行报「2 个」、执行期 guard 只允许 1 个），绑定日志也要
+// 与授权面同口径。
+test('§1：请求面与 SAFE_SCOPED_TOOLS 重复时，状态行与绑定日志都按去重后的授权面报数', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const value = await callDelegate(h, {
+    description: '列模型',
+    prompt: 'x',
+    tools: ['list_subagent_models'],
+  })
+
+  assert.deepEqual(value.tools, ['list_subagent_models'])
+  const text = h.getTool().output.render({}, value)[0].text
+  assert.match(text, /1 个：list_subagent_models/, '状态行必须按去重后的授权面报数')
+
+  const bound = h.log.find(
+    ([level, message]) => level === 'info' && message.includes('已绑定委派策略'),
+  )
+  assert.ok(bound, '应当有一条绑定成功日志')
+  assert.match(bound[1], /工具 1 个/, '绑定日志必须与授权面同口径')
+})
+
+// §1（2026-11-03 复审）：上一条的输入 `['list_subagent_models']` 请求面长度与授权面
+// 大小都是 1 —— 把 `grantedCount` 回退成 `policy.allowTools.length` 它仍然会绿，
+// 锁不住「绑定日志按授权面报数」这个口径。改用 `['read']`：请求 1 个，授权 2 个
+// （read + 宿主 scoped 的 list_subagent_models）。回退后绑定日志会变成「1 个」，
+// 本条因此变红；状态行由返回的 granted 面单独计算（锁它的是上一条）。
+test('§1：请求面只有 read 时，状态行与绑定日志都报授权面的 2 个工具', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const value = await callDelegate(h, { description: '只读', prompt: 'x', tools: ['read'] })
+
+  assert.deepEqual(value.tools, ['read', 'list_subagent_models'])
+  const text = h.getTool().output.render({}, value)[0].text
+  assert.match(text, /2 个：read, list_subagent_models/, '状态行必须报授权面 2 个，不是请求面 1 个')
+
+  const bound = h.log.find(
+    ([level, message]) => level === 'info' && message.includes('已绑定委派策略'),
+  )
+  assert.ok(bound, '应当有一条绑定成功日志')
+  assert.match(bound[1], /工具 2 个/, '绑定日志必须报授权面 2 个，回退成请求面会输出 1 个')
+})
+
 test('只传 prompt 时不施加任何策略（保持与官方 subagent 一致的默认行为）', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
@@ -650,12 +694,9 @@ test('createMutex 按提交顺序执行，且前一个失败不影响后一个',
   assert.deepEqual(order, ['slow', 'fast'])
 })
 
-// 真机回归（2026-10-29）：`send_message` 唤醒一个 idle 子代理会走 cold resume，
-// 子代理的 ctx 被重建，挂在它上面的 `restrict()` 与 scoped `guard()` 全部消失。
-// 实测后果：一个只被授权 read/glob/grep 的子代理，被唤醒后工具面恢复成全量，
-// 并成功调 `subagent` 派出了孙代理（会话 794cebdb，depth=2，确实存在）。
-// 兜底：插件 ctx 上的全局 guard 按 sessionId 查授权表，冷恢复后依然生效。
-test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦住越权工具', async () => {
+// 正常派发的子代理也会被登记进 `pinned`，插件 ctx 上的全局 guard 因此同样管得到
+// 它：scoped guard 是子代理 ctx 上的一道，这层是插件 ctx 上的一道。
+test('正常派发的子代理越权调 subagent 时，插件 ctx 上的全局 guard 拦住', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
   const value = await callDelegate(h, {
@@ -679,16 +720,49 @@ test('冷恢复后 scoped 注册消失，插件 ctx 上的全局兜底仍然拦�
   assert.equal(bail({ name: 'pwsh', agent: { sessionId: 'parent-1' } }), undefined)
   // 没有 sessionId 的调用（后台作业等）也不受影响。
   assert.equal(bail({ name: 'pwsh', agent: undefined }), undefined)
-  // 授权内的工具冷恢复后仍放行。
+  // 授权内的工具仍放行。
   assert.equal(bail({ name: 'read', agent: { sessionId: value.subagentId } }), undefined)
   assert.equal(
     bail({ name: 'list_subagent_models', agent: { sessionId: value.subagentId } }),
     undefined,
   )
-  // 越权工具：即使 scoped guard 已经不在了，这一层仍然拒绝。
+  // 越权工具：这一层拒绝。
   const denied = bail({ name: 'subagent', agent: { sessionId: value.subagentId } })
   assert.match(denied, /同进程绑定/) // 正常派发路径的来源标记（BACKLOG §2）
   assert.match(denied, /不在该子代理的授权工具面内/)
+})
+
+test('冷恢复重建的子代理越权调用时，拒绝文案标明「冷恢复重建」', () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const { agent } = makeColdAgent({
+    sectionFace: ['read'],
+    headerFace: ['read', 'subagent'],
+  })
+
+  h.emitCreated(agent)
+
+  const fallback = h.calls.globalGuards.at(-1)
+  const denied = fallback({ agent, name: 'subagent' })
+  assert.match(denied, /冷恢复重建/)
+  assert.doesNotMatch(denied, /无 ctx/)
+})
+
+test('冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」', () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const { agent } = makeColdAgent({
+    sectionFace: ['read'],
+    headerFace: ['read', 'subagent'],
+  })
+  // 冷恢复时子代理还没有 agent 上下文：只能登记 pinned + 来源，靠全局 guard 兜底。
+  agent.ctx = undefined
+
+  h.emitCreated(agent)
+
+  const fallback = h.calls.globalGuards.at(-1)
+  const denied = fallback({ agent, name: 'subagent' })
+  assert.match(denied, /冷恢复重建（无 ctx）/)
 })
 
 // 2026-10-29 真机事故（fold #58）：白名单里混进 dsh-ling 的 `recall` / `tree_read` /
