@@ -6,6 +6,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import { dropPending, pushPending, takePending, resolveAllowedTools, normalizeCap } from '../lib/policy.js'
 import { scriptPathOf, shouldCapSandbox } from '../lib/rules.js'
@@ -78,4 +79,53 @@ test('部署上限：越界请求响亮失败，enableMaxTools=false 时不设�
   assert.deepEqual(resolveAllowedTools([], []), [], '显式空集 = 零工具')
   assert.equal(normalizeCap(false, ['read']), null)
   assert.deepEqual(normalizeCap(true, ['read']), ['read'])
+})
+
+// ---- workflow 派生旁路（2026-11 修复回归）----------------------------------
+// `workflow` 脚本里的 `agent("...")` 会派一个继承父会话 preset 的孙代理，
+// 绕开父 agent 被 restrict 后的工具面。它和 subagent / subagent_fork 一样
+// 是「派生通道」，三处名单都必须拒绝它。
+
+/** 极简读取 default cordis.patch.yml 里的 maxTools 白名单（不引 YAML 依赖）。 */
+function defaultMaxTools() {
+  const yaml = readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8')
+  const lines = yaml.split(/\r?\n/)
+  const start = lines.findIndex((line) => /^\s{8}maxTools:\s*$/.test(line))
+  assert.notEqual(start, -1, 'cordis.patch.yml 里应能定位 maxTools')
+  const names = []
+  for (const line of lines.slice(start + 1)) {
+    const match = /^\s{10}- (\S+)\s*$/.exec(line)
+    if (match === null) break
+    names.push(match[1])
+  }
+  assert.ok(names.includes('read'), 'maxTools 解析结果应包含真实工具名')
+  return names
+}
+
+test('workflow 不能再作为 delegate 的授权面（无部署上限时入口直接拒绝）', () => {
+  assert.throws(
+    () => resolveAllowedTools(['workflow'], null),
+    /不能包含派生工具/,
+    '默认部署（enforceMaxTools: false）下也必须拒绝 workflow',
+  )
+  assert.throws(
+    () => resolveAllowedTools(['read', 'workflow'], null),
+    /不能包含派生工具/,
+  )
+})
+
+test('workflow 即使出现在部署上限里也不能被请求放行', () => {
+  // 派生名单校验发生在与上限取交集**之前**，所以 cap 里带着它也没用。
+  assert.throws(
+    () => resolveAllowedTools(['workflow'], ['read', 'grep', 'workflow']),
+    /不能包含派生工具/,
+  )
+})
+
+test('默认 maxTools 不含 workflow，继承上限的子代理工具面也不含它', () => {
+  const cap = defaultMaxTools()
+  assert.ok(!cap.includes('workflow'), '默认部署上限不能把 workflow 留给子代理')
+  const inherited = resolveAllowedTools(undefined, cap)
+  assert.ok(Array.isArray(inherited), '有部署上限时应返回上限本身')
+  assert.ok(!inherited.includes('workflow'), '继承上限也不能拿回 workflow')
 })

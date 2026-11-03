@@ -142,7 +142,6 @@
           - view_canvas
           - web_fetch
           - web_search
-          - workflow
           - working_directory
           - write
           - x_search

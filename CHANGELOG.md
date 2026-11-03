@@ -4,6 +4,39 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-11-03
+
+**The fourth derived channel: `workflow` was still a way out.**
+
+### Fixed
+- **`workflow` bypassed the tool-face narrowing.** `dsh-tool-workflow` passes the calling
+  agent as `parent` to `dsh-workflow-ptc`, which forwards it verbatim to `subagents.start`;
+  a child created from a script's `agent()` therefore carries the caller's
+  `parentSession`. `workflow` was in none of the three name lists and not in the F8 window
+  check, so under the default deployment it was the last remaining way for a delegated
+  child to reach another derived channel — and inside a delegation window it could steal
+  the `pending` policy from the real `delegate` child (which then fails closed). It is now
+  in `maxTools`, `DERIVED_TOOL_NAMES`, `DERIVED_SCOPED_TOOLS` and the F8 guard.
+- **Filtering moved to the source.** `resolveAllowedTools(undefined, cap)` now removes
+  `DERIVED_TOOL_NAMES` instead of returning the ceiling unchanged. It has to happen here
+  rather than in `applyPolicy`: `allowTools` feeds `restrict()`, the system-prompt section
+  and the guard, so filtering at one of them would leave the other two declaring derived
+  channels.
+- **The rejection message no longer over-counts.** The `N` in "omit `tools` to inherit all
+  `N` whitelisted tools" now excludes derived channels, matching what a child actually gets.
+
+### Changed
+- `renderSection()` appends one clarification after the `可用工具：…` line: that list is the
+  **authorization ceiling**, not the set of tools the profile actually loads. A real child
+  conflated the two, called tools that were listed but not installed, and reported
+  "insufficient permission".
+  - ⚠️ `可用工具：…。你没有其他工具` is also the parse anchor for cold recovery
+    (`recoverFaceFromLog`). The wording cannot change; clarification must be appended after
+    it and must not itself contain `可用工具：`.
+
+### Tests
+- 129 → 136.
+
 ## [0.5.0] — 2026-10-31
 
 **The plugin grows a face: two switches on its Plugins-page card, and the details stay with the

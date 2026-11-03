@@ -293,6 +293,21 @@ test('模型没传 tools + 部署上限为空数组 ⇒ 子代理一个工具都
   assert.deepEqual(h.calls.restrict, [{ allow: [] }])
 })
 
+// 洞 2：`requested === undefined` 时旧实现原样返回 cap，派生通道于是流进
+// `restrict()`、system prompt 段落和 guard 三处。修复点在 `resolveAllowedTools`
+// 的源头，所以这里三处一起断言，防止将来只补其中一处。
+test('部署上限含 workflow 且不传 tools ⇒ restrict、段落、guard 三处都不含 workflow', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'workflow'] }))
+  const value = await callDelegate(h, { description: '只读', prompt: 'x' })
+
+  assert.deepEqual(value.tools, ['read'], '返回给调用方的授权面也不含 workflow')
+  assert.ok(!h.calls.restrict[0].allow.includes('workflow'), 'restrict 不得接受 workflow')
+  assert.doesNotMatch(h.calls.sections[0].text, /workflow/, 'system prompt 段落不得声明 workflow')
+  assert.equal(h.calls.guards[0]({ name: 'read' }), undefined)
+  assert.match(h.calls.guards[0]({ name: 'workflow' }), /不在该子代理的授权工具面内/)
+})
+
 test('只传 prompt 时不施加任何策略（保持与官方 subagent 一致的默认行为）', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
@@ -835,6 +850,50 @@ test('F1（red-3c）：有段落但无请求头时，段落里的派生通道也
   assert.match(fallback({ agent, name: 'subagent_fork' }), /不在该子代理的授权工具面内/)
 })
 
+// workflow 派生旁路：`agent("...")` 会派一个继承父会话 preset 的孙代理。
+// 段落面、请求头面、旧日志退回请求头这三条冷恢复岔路都必须剔除它。
+test('workflow 派生旁路：冷恢复的各条岔路都不能把 workflow 放回授权面', () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+
+  const sectioned = makeColdAgent({
+    sectionFace: ['read', 'workflow'],
+    headerFace: ['read', 'workflow'],
+    sid: 'child-cold-wf-1',
+  })
+  h.emitCreated(sectioned.agent)
+  assert.deepEqual(sectioned.calls.restrict[0].allow, ['read'], '段落与请求头里的 workflow 都必须剔除')
+  const fallback = h.calls.globalGuards.at(-1)
+  assert.match(fallback({ agent: sectioned.agent, name: 'workflow' }), /不在该子代理的授权工具面内/)
+
+  const legacy = makeColdAgent({
+    sectionFace: null,
+    headerFace: ['read', 'workflow'],
+    sid: 'child-cold-wf-2',
+  })
+  h.emitCreated(legacy.agent)
+  assert.deepEqual(legacy.calls.restrict[0].allow, ['read'], '旧日志退回请求头时也必须剔除 workflow')
+  assert.match(fallback({ agent: legacy.agent, name: 'workflow' }), /不在该子代理的授权工具面内/)
+})
+
+// 评审员指出的第三条岔路：只有段落、没有请求头可对照（`headerFace === null`）。
+// 上一轮的 workflow 冷恢复用例只覆盖了「段落+请求头」与「旧日志只有请求头」。
+test('F1（red-3c）：冷恢复只有段落没有请求头时同样剔除 workflow', () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  const { agent, calls } = makeColdAgent({
+    sectionFace: ['read', 'workflow'],
+    headerFace: null,
+    sid: 'child-cold-wf-3',
+  })
+
+  h.emitCreated(agent)
+
+  assert.deepEqual(calls.restrict[0].allow, ['read'], '只有段落时也必须剔除 workflow')
+  const fallback = h.calls.globalGuards.at(-1)
+  assert.match(fallback({ agent, name: 'workflow' }), /不在该子代理的授权工具面内/)
+})
+
 test('F-B：不是本插件派的子代理（日志里没有段落）不恢复', () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
@@ -853,7 +912,10 @@ test('F-B：不是本插件派的子代理（日志里没有段落）不恢复',
 // 之后 —— 官方 `subagent` 的参数里没有命令字段，所以它**从未执行过**；而且判据是
 // 全局 `pending.size > 0`，一旦生效又会误伤别的会话。现在挪到判空之前，并按调用方
 // 自己的会话 id 判。
-test('F8：同一父会话的委派窗口内拒绝官方 subagent，其他会话不受影响', async () => {
+// workflow 也走同一个 `parentSession` 认领：宿主 `dsh-workflow-ptc` 的 `startChild`
+// 把调用者作为 `parent` 传给 `subagents.start`，脚本里的 `agent()` 派出的子代理
+// 因此能抢走本该给 delegate 子代理的 pending。窗口内必须一起挡。
+test('F8：同一父会话的委派窗口内拒绝官方 subagent / workflow，其他会话不受影响', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults({ denyPatterns: ['\\bvssadmin\\b'] }))
   // 让这次委派卡在 pending 里（窗口不关闭）。
@@ -873,8 +935,34 @@ test('F8：同一父会话的委派窗口内拒绝官方 subagent，其他会话
     undefined,
     '别的会话在委派窗口内不该被误伤',
   )
+  assert.equal(
+    gate2({ name: 'workflow', arguments: { script: 'x' }, agent: otherSession }),
+    undefined,
+    '别的会话调用 workflow 同样不该被误伤',
+  )
   const denied = gate2({ name: 'subagent', arguments: { prompt: 'x' }, agent: h.parent })
   assert.match(String(denied), /委派正在进行/)
+  const deniedWorkflow = gate2({ name: 'workflow', arguments: { script: 'x' }, agent: h.parent })
+  assert.match(String(deniedWorkflow), /委派正在进行/)
+})
+
+test('F8：非委派窗口内 workflow 不被误伤', () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ denyPatterns: ['\\bvssadmin\\b'] }))
+
+  const gate2 = h.calls.globalGuards.find(
+    (fn) => typeof fn({ name: 'pwsh', arguments: { command: 'vssadmin delete shadows' } }) === 'string',
+  )
+  assert.ok(gate2 !== undefined, '必须能找到闸二的 guard')
+  // 没有 pending：workflow（以及官方 subagent）必须照常放行。
+  assert.equal(
+    gate2({ name: 'workflow', arguments: { script: 'x' }, agent: h.parent }),
+    undefined,
+  )
+  assert.equal(
+    gate2({ name: 'subagent', arguments: { prompt: 'x' }, agent: h.parent }),
+    undefined,
+  )
 })
 
 // R1-02（2026-10-31 对抗审计）：`provider: 'fork'` 会把父会话的历史请求头带进子会话，
