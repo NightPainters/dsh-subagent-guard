@@ -41,6 +41,10 @@ realising the message was simply lying.**
   `冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」`.
 
 ### Changed
+- The `tools: []` receipt now names the one host-scoped tool the child always granted anyway
+  (`list_subagent_models`) instead of 「无（子代理拿不到任何工具）」. The narrowing itself is
+  unchanged: `restrict()` still receives an empty allow list. The old wording was accurate about
+  intent and wrong about the surface — the same class of defect as the fix above.
 - A comment in `lib/index.js` claiming the global guard affects only cold-recovered sessions was
   simply wrong — normal delegated children are in that table too, and the guard is the first
   runtime interception on that path. Rewritten.

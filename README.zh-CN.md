@@ -156,8 +156,8 @@ registrations remain visible"*。而官方 `dsh-tool-subagent:605-607` 会在
 子代理最终工具面 = 模型传的 tools ∩ 部署的 maxTools
 ```
 
-模型只能收窄，永远不能放宽。`maxTools: []` 配 `enforceMaxTools: true` 等于
-一个工具都不给。
+模型只能收窄，永远不能放宽。`maxTools: []` 配 `enforceMaxTools: true` 等于不给子代理任何
+业务工具——宿主 scoped 装的 `list_subagent_models` 仍可调用（`restrict()` 移不走它，这是宿主的封顶）。
 
 #### 并发
 

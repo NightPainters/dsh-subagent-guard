@@ -174,7 +174,8 @@ child tool surface = tools (from the model) ∩ maxTools (from deployment config
 ```
 
 The model may narrow the surface, never widen it. `maxTools: []` with
-`enforceMaxTools: true` means the child gets no tools at all.
+`enforceMaxTools: true` means the child gets no tools of its own — only the host-scoped
+`list_subagent_models`, which `restrict()` cannot remove, stays callable.
 
 #### Concurrency
 
