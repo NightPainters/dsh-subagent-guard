@@ -62,6 +62,10 @@ the message was simply lying.**
 - A comment in `lib/index.js` claiming the global guard affects only cold-recovered sessions was
   simply wrong — normal delegated children are in that table too, and the guard is the first
   runtime interception on that path. Rewritten.
+- The README's cold-resume boundary now says what was always true but unstated: a child whose
+  first request never reached the session log stays **unmanaged for its lifetime** after a
+  restart, because the pending policy is gone and no marker can be rebuilt. No behaviour
+  change; recorded as a known limitation and tracked separately.
 - One test name asserted coverage it never had. It exercised normal delegation via `callDelegate`
   and never entered `recoverPolicy`, yet its name promised cold recovery. It is now named
   `正常派发的子代理越权调 subagent 时，插件 ctx 上的全局 guard 拦住`, and the assertion keys on

@@ -371,8 +371,11 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
   with neither the `可用工具` line nor a request header is treated as an empty surface
   (fail-closed). Conversely, a child with **no marker at all** — it died before its first
   request and never ran a turn — cannot be identified as this plugin's, so it is not restored
-  and keeps the inherited surface. That window is narrow and was observed zero times among
-  real delegations. Intersecting is the safe direction but can **over-narrow**: an
+  and keeps the inherited surface. The miss is also **permanent for that child**: the pending
+  policy is gone after the restart, so a resumed child with no marker never regains its pin —
+  the plugin-level guard has no entry for its session and therefore denies nothing for it.
+  The window is narrow (the first `system/message` of the child's first step) and was observed
+  zero times among real delegations. Intersecting is the safe direction but can **over-narrow**: an
   agent-scoped tool that was absent from that particular request header is dropped (fewer
   tools, never more).
 - **Cold resume has exactly one trigger: `agent/created`.** If a future host stops emitting
