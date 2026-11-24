@@ -6,9 +6,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.5.2] — 2026-11-24
 
-**Two reporting defects, neither of which weakens a gate — but both told the caller the wrong
-story about who stopped what, and one of them is the kind you investigate for an hour before
-realising the message was simply lying.**
+**One host-contract break that made delegation throw, plus two reporting defects. The first is the
+one that mattered: on `@deepseek-ai/dsh-subagent` ≥ 0.2.2-rc.5 every `delegate` call failed before
+a child existed. The other two never weakened a gate — but they told the caller the wrong story
+about who stopped what, and one of them is the kind you investigate for an hour before realising
+the message was simply lying.**
 
 ### Fixed
 - **Delegation failed on hosts ≥ `0.2.2-rc.5`.** `SubagentStartRequest` moved `parent` / `prompt` /
@@ -48,6 +50,11 @@ realising the message was simply lying.**
   `冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」`.
 
 ### Changed
+- **`delegate` is registered inside the `subagents` inject scope, not the plugin's own.** Cordis
+  attributes an effect to the `ctx` the property was read from, so the old `ctx.effect` put the
+  registration in the plugin fiber: when `subagents` reloaded, the inject scope's teardown did not
+  remove it, the re-run threw `tool "delegate" is already registered`, and the scope went `FAILED`
+  while the tool kept a reference to the dead service. Behaviour under a normal start is unchanged.
 - The `tools: []` receipt now names the one host-scoped tool the child always granted anyway
   (`list_subagent_models`) instead of 「无（子代理拿不到任何工具）」. The narrowing itself is
   unchanged: `restrict()` still receives an empty allow list. The old wording was accurate about
