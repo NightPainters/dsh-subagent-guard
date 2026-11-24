@@ -43,9 +43,11 @@ not registered yet (a real-host probe measured every relevant service as `undefi
 fail-closed branch always won, and a **narrower** child was raised to the cap. 0.4.3
 reads the service inside the event.
 
-If the mode still **cannot be read** at event time, the child is forced to
-`subagentSandboxCap` and an error is logged (fail-closed). This matters because gate 1 is
-often the only thing standing between a subagent and `danger-full-access`.
+If the mode still **cannot be read** at event time, the child is forced to `read-only` and an
+error is logged (fail-closed). It is deliberately **not** forced to `subagentSandboxCap`: that cap
+defaults to `workspace-write`, so capping a child whose real mode is narrower would widen it.
+This matters because gate 1 is often the only thing standing between a subagent and
+`danger-full-access`.
 
 Applies to subagents created *after* the plugin loads.
 
@@ -383,20 +385,22 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
   paths, `node -e`, and scripts that run other scripts are outside static matching — an
   explicit boundary, confirmed independently on 2026-10-31 (three separate checks — A2, A5, A7).
 - **Gate 2 also blocks the auditor itself.** Read-only queries such as `Get-Help shutdown` are
-  unaffected, but audit scripts that actually run sensitive commands are refused. That is by
-  design; an exemption would itself be a bypass surface.
+  unaffected, but audit scripts that actually run sensitive commands are refused — and so is
+  purely *reading* a file whose content matches the denylist, because the path extractor cannot
+  tell `Get-Content x.ps1` from running it. That is a fail-closed over-block, tracked for 0.5.3,
+  and it is by design; an exemption would itself be a bypass surface.
 - **A `provider: 'fork'` child is restored from the parent's historical paragraph surface**,
   which can be narrower than it should be (over-restriction, not widening).
-- **With `serializeBind: false`, two concurrent delegations can swap policies** (DoS shape,
-  not escalation); the default is `true`.
+- **`serializeBind: false` is ignored (deprecated in 0.4.7).** Bindings are always serialized;
+  the setting only produces a startup warning. The mutex covers only the register → create →
+  verify window, so child execution concurrency is unaffected.
 - **The side table (`pinned`) is an in-process closure Map** covering only children of this
   plugin; children created by other plugins or the official `subagent` are capped by gate 1.
 - **An unknown sandbox mode is treated as the widest** and capped to `read-only`, exactly like an
   unreadable mode. It is **not** capped to `subagentSandboxCap`: that cap defaults to
-  `workspace-write`, so capping a stricter unknown mode to it would widen the sandbox.
-  (default `workspace-write`) with a warning. A host that introduces a new mode is a
-  migration event for this plugin: gate 1
-  would otherwise treat it as "already narrow" and leave it alone.
+  `workspace-write`, so capping a stricter unknown mode to it would widen the sandbox. A host that
+  introduces a new mode is a migration event for this plugin: gate 1 would otherwise treat it as
+  "already narrow" and leave it alone.
 - The ceiling rewrite is stored as a `sandbox/mode` event, so it replays with the
   session. Archived sessions are not replayed.
 
