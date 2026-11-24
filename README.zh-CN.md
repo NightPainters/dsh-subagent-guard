@@ -97,9 +97,11 @@ fail-closed 分支，把**更窄**的子代理抬到 cap。安全方向相反，
 - **执行目录要按会话的 workingDirectory 投影算**（0.5.2）：`session.header.cwd` 是不可变的
   原始项目目录；命令真正执行的目录是 `workingDirectory` 投影——`working_directory { cd }`
   工具与调用自带的 `workdir` 参数改的都是它。相对脚本路径现在会按这个投影、按参数树里
-  递归找到的每个 `workdir` / `cwd` / `directory`、以及命令文本中**引号外**出现的每个
-  字面量 `cd` / `Set-Location` / `Push-Location` 目标逐个解析，所有候选都读。
-  不跟（写进 Known limits）：变量拼路径、`pwsh -Command` / `cmd /c` 子壳里再嵌一层的
+  递归找到的每个 `workdir` / `cwd` / `directory`、以及命令文本里能解析出来的每个
+  字面量 `cd` / `Set-Location` / `Push-Location` 目标（语句开头、**引号外**，以及
+  `if` / `& { }` / `$( )` 块内）逐个解析。凡是枚举出来的候选都读；候选目录超过 **32**
+  个时整条命令**直接拒绝**，绝不部分检查。
+  不跟（见「已知边界」）：变量拼路径、`pwsh -Command` / `cmd /c` 子壳里再嵌一层的
   `cd`、以及 `Start-Process -WorkingDirectory`。
 - **显式解释器的无扩展名目标也要查**：`bash ./payload`、`sh /opt/run` 这类没有已知
   扩展名的目标，只要形如路径（含 `/` `\` 或以 `.` 开头）就读进去检查。
@@ -280,6 +282,11 @@ dsh plugin add dsh-subagent-guard
   数组形态，脚本**内容**会按同一套规则匹配。参数在运行时拼接的写法
   （`Start-Process -ArgumentList @('-File', $p)`、`Invoke-Expression`、变量）无法从文本解析，
   不做检查。
+- **脚本目录解析是有预算的。** 只跟随能从命令里读到的目录：会话的 workingDirectory 投影、
+  调用参数里的 `workdir` / `cwd` / `directory`（递归，深度 ≤ 3）、以及语句开头或
+  `if` / `& { }` / `$( )` 块内的字面量 `cd` 系目标。`pwsh -Command` / `cmd /c`
+  子壳里的 `cd`、`Start-Process -WorkingDirectory`、以及变量拼出来的路径都不跟。
+  候选目录超过 **32** 个时按 fail-closed 拒绝，而不是只查一部分。
 - **`serializeBind: false` 已弃用并被忽略（0.4.7）。** 策略认领按父会话 FIFO，而
   `agent/created` 的触发顺序由宿主决定；允许两个绑定窗口重叠，就会让子代理领走另一次调用的
   策略。现在绑定一律串行，这个闸只覆盖「登记 → 创建 → 核对」窗口，子代理执行的并发不受影响。
@@ -369,14 +376,14 @@ dsh plugin add dsh-subagent-guard
 ## 测试
 
 ```bash
-npm test   # 六个套件，154 条用例，全部脱离宿主
+npm test   # 六个套件，159 条用例，全部脱离宿主
 ```
 
 | 套件 | 条数 | 覆盖面 |
 |---|---|---|
 | `guard.test.mjs` | 19 | 规则层：正则、命令归一化、脚本路径（含引号内分隔符与 `cmd /c` 子命令）、深度、档位强弱 |
 | `policy.test.mjs` | 22 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
-| `apply.test.mjs` | 36 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
+| `apply.test.mjs` | 41 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
 | `delegate.test.mjs` | 57 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
 | `regressions.test.mjs` | 10 | YAML 引号、pending 清理、上限交集 |
 | `audit-20261028.test.mjs` | 10 | 审计发现里凡能脱离宿主钉住的部分 |

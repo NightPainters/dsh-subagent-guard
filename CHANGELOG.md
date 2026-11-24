@@ -57,10 +57,14 @@ the message was simply lying.**
   `cd <dir>; pwsh -File x.ps1`. The resolver now takes the projection, every `workdir` /
   `cwd` / `directory` found recursively in the arguments, and every literal
   `cd` / `Set-Location` / `Push-Location` target that appears outside quotes in the command
-  text, then reads every candidate. `cd` is parsed with the same quote-aware segmentation as
-  script paths, so a `cd` inside a string argument is not mistaken for a directory change.
-  Paths built from variables, `cd` nested inside `pwsh -Command` / `cmd /c`, and
-  `Start-Process -WorkingDirectory` remain out of reach and are documented as known limits.
+  text, then reads every candidate. `cd` is found by a small lexer (statement start, or
+  inside an `if` / `& { }` / `$( )` block; switches and trailing comments are skipped), so a
+  `cd` inside a string argument is not mistaken for a directory change. The candidate list is
+  bounded: a command that would exceed 32 candidate directories is **refused**, never partially
+  checked — silently truncating the list let a wall of junk `Set-Location` calls push the real
+  directory out of the budget. Paths built from variables, `cd` nested inside
+  `pwsh -Command` / `cmd /c`, and `Start-Process -WorkingDirectory` remain out of reach and
+  are listed under Known limits.
 - **A resumed child could claim the policy of an in-flight delegation.** `send_message`
   wakes an idle child through `agents.resume()`, and the host re-announces it as
   `agent/created` with `source: 'resume'`. The claim was keyed only on `parentSession`, which
@@ -100,7 +104,7 @@ the message was simply lying.**
   therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 154 (19 + 22 + 36 + 57 + 10 + 10).
+- 136 → 159 (19 + 22 + 41 + 57 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 

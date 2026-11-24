@@ -743,3 +743,89 @@ test('配置页开关是 `.volatile()` 引用（读值走 get()）时同样生�
 
   assert.deepEqual(appended, [], 'volatile 引用的 get() 返回 false 时，闸一也不该动档位')
 })
+
+// F3 v3（delta 第二轮）：候选预算必须 fail-closed；cd 要按词法形态认。
+// 旧实现用「语句开头的正则」，于是带尾随开关/注释、以及块作用域里的 cd 全漏；
+// 且预算用静默截断，攻击者堆垃圾 Set-Location 就能把真实目录挤出预算。
+function f3Fixture() {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+  writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+  return { sessionDir, evilDir }
+}
+
+function f3Guard(command, sessionDir) {
+  const { ctx, guards } = makeCtx()
+  apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+  const { agent } = makeAgent(1)
+  agent.session.header.cwd = sessionDir
+  return guards[0]({ name: 'pwsh', arguments: { command }, agent })
+}
+
+test('F3：目录候选超过预算时 fail-closed（不许静默截断）', () => {
+  const { sessionDir, evilDir } = f3Fixture()
+  try {
+    const junk = Array.from({ length: 40 }, (_, i) => `Set-Location "C:\\junk-${i}"`).join('\n')
+    const reason = f3Guard(`${junk}\ncd "${evilDir}"\npwsh -File x.ps1`, sessionDir)
+    assert.equal(typeof reason, 'string', '预算超限必须拒绝，不能静默放行')
+    assert.match(reason, /检查预算/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：Set-Location -PassThru 的目标同样要被解析', () => {
+  const { sessionDir, evilDir } = f3Fixture()
+  try {
+    const reason = f3Guard(`Set-Location -PassThru "${evilDir}"; pwsh -File x.ps1`, sessionDir)
+    assert.equal(typeof reason, 'string')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：Set-Location -Path X -PassThru 的尾随开关不影响目标', () => {
+  const { sessionDir, evilDir } = f3Fixture()
+  try {
+    const reason = f3Guard(`Set-Location -Path "${evilDir}" -PassThru; pwsh -File x.ps1`, sessionDir)
+    assert.equal(typeof reason, 'string')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：块作用域里的 cd 也要认（if / & {} / $()）', () => {
+  const { sessionDir, evilDir } = f3Fixture()
+  try {
+    for (const command of [
+      `if ($true) { cd "${evilDir}" }; pwsh -File x.ps1`,
+      `& { cd "${evilDir}" }; pwsh -File x.ps1`,
+      `$(cd "${evilDir}"); pwsh -File x.ps1`,
+    ]) {
+      const reason = f3Guard(command, sessionDir)
+      assert.equal(typeof reason, 'string', `块作用域 cd 未识别：${command}`)
+      assert.match(reason, /间接执行的脚本/)
+    }
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：cd 目标后的注释不影响解析', () => {
+  const { sessionDir, evilDir } = f3Fixture()
+  try {
+    const reason = f3Guard(`cd "${evilDir}" # 切到工作目录\npwsh -File x.ps1`, sessionDir)
+    assert.equal(typeof reason, 'string')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
