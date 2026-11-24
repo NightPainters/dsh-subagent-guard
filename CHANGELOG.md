@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.2] — 2026-11-24
 
 **Two reporting defects from `BACKLOG-0.4.8.md` §1/§2. Neither weakens a gate — but both told the
 caller the wrong story about who stopped what, and one of them is the kind you investigate for an

@@ -355,7 +355,7 @@ dsh plugin add dsh-subagent-guard
 ## 测试
 
 ```bash
-npm test   # 六个套件，129 条用例，全部脱离宿主
+npm test   # 六个套件，142 条用例，全部脱离宿主
 ```
 
 | 套件 | 条数 | 覆盖面 |
@@ -363,8 +363,8 @@ npm test   # 六个套件，129 条用例，全部脱离宿主
 | `guard.test.mjs` | 19 | 规则层：正则、命令归一化、脚本路径（含引号内分隔符与 `cmd /c` 子命令）、深度、档位强弱 |
 | `policy.test.mjs` | 21 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
 | `apply.test.mjs` | 29 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
-| `delegate.test.mjs` | 43 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
-| `regressions.test.mjs` | 7 | YAML 引号、pending 清理、上限交集 |
+| `delegate.test.mjs` | 53 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
+| `regressions.test.mjs` | 10 | YAML 引号、pending 清理、上限交集 |
 | `audit-20261028.test.mjs` | 10 | 审计发现里凡能脱离宿主钉住的部分 |
 
 ## 外部审计
