@@ -46,6 +46,7 @@ function makeHarness(opts = {}) {
     restrictThrows = false,
     restrictUnknown = [],
     childOverride,
+    resumeAgent,
   } = opts
   const listeners = new Map()
   const log = []
@@ -141,6 +142,11 @@ function makeHarness(opts = {}) {
           throw new TypeError("Cannot read properties of undefined (reading 'id')")
         }
         calls.activations.push(spec)
+        // C：可选地在创建之前派发一次 resume 事件（模拟 send_message 唤醒旧子代理）。
+        if (resumeAgent !== undefined) {
+          const resumeHandlers = listeners.get('agent/created') ?? []
+          for (const handler of resumeHandlers) await handler({ agent: resumeAgent, source: 'resume' })
+        }
         if (emitCreated) {
           // 宿主在 startActivation 内部同步派发 agent/created（serial + await）。
           const handlers = listeners.get('agent/created') ?? []
@@ -1251,4 +1257,57 @@ test('「工具面拦截」关掉时，显式的 tools: [] 仍被尊重（零工
   const value = await callDelegate(h, { description: 'x', prompt: 'y', tools: [] })
   assert.equal(value.kind, 'delegation')
   assert.deepEqual(h.calls.restrict, [{ allow: [] }], 'red-4 R2：空数组是最严的请求，开关关掉也不能放宽')
+})
+
+// ---- C / DF-1（2026-11-24 发布关②.5）---------------------------------------
+
+// C：宿主的 agent/created 在 resume 时也会派发（payload 带 source: 'resume'），
+// 而被唤醒子代理的 parentSession 正是发起委派的父会话。旧实现按 FIFO 认领，
+// 于是旧子代理抢走新策略（可被换宽），真正的子代理认领失败被取消。
+test('C：resume 唤醒的旧子代理不抢正在委派的策略', async () => {
+  const oldRestrict = []
+  const oldAgent = {
+    sessionId: 'old-1',
+    session: { id: 'old-1', header: { parentSession: 'parent-1' }, log: [] },
+    ctx: {
+      tools: {
+        restrict: (filter) => {
+          oldRestrict.push(filter)
+          return () => {}
+        },
+        guard: () => () => {},
+      },
+      systemPrompt: { section: () => () => {} },
+    },
+  }
+  const h = makeHarness({ resumeAgent: oldAgent })
+  apply(h.ctx, withDefaults())
+
+  const result = await callDelegate(h, { description: 'x', prompt: 'x', tools: ['pwsh'] })
+
+  assert.equal(oldRestrict.length, 0, 'resume 的旧子代理不能领走 pending 策略')
+  assert.equal(h.calls.cancelled.length, 0, '真正的子代理必须绑定成功，不能被取消')
+  assert.equal(h.calls.restrict.length, 1, '只有真正的子代理被收窄一次')
+  assert.ok(result.tools.includes('pwsh'))
+})
+
+// DF-1：派生通道名单原来漏了插件自己的委派工具（toolName）。schema 默认
+// enforceMaxTools: false 时 delegate(tools:[read,delegate]) 原样通过，
+// 子代理于是能用自己的 delegate 造一个带 pwsh 的孙代理。
+test('DF-1：父模型不能把 delegate 授权给子代理', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  await assert.rejects(
+    () => callDelegate(h, { description: 'x', prompt: 'x', tools: ['read', 'delegate'] }),
+    /派生工具/,
+  )
+})
+
+test('DF-1：自定义 toolName 同样进派生名单', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults({ toolName: 'spawn_child' }))
+  await assert.rejects(
+    () => callDelegate(h, { description: 'x', prompt: 'x', tools: ['read', 'spawn_child'] }),
+    /派生工具/,
+  )
 })

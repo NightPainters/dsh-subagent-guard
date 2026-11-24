@@ -94,10 +94,13 @@ fail-closed 分支，把**更窄**的子代理抬到 cap。安全方向相反，
 - **会话 cwd 优先，且所有存在的候选文件都查**：相对路径先按子代理会话的 `cwd` 解析，
   再按进程 cwd、最后按原样；任一候选命中规则即拒绝。以前是「读到第一个就查那一个」，
   进程 cwd 下的同名文件可以遮蔽真正会被执行的那份。
-- **执行目录要按这次调用算，不只按会话**（0.5.2）：相对脚本路径还会按工具参数的
-  `workdir` / `cwd` / `directory` 解析，也认命令文本里的字面量 `cd` /
-  `Set-Location` / `Push-Location` 目标。以前只按会话 cwd 解析，于是 `workdir` 目录里
-  的同名脚本会被执行却一个字节都没被读过——真机上用 `cd <目录>; pwsh -File x.ps1` 复现。
+- **执行目录要按会话的 workingDirectory 投影算**（0.5.2）：`session.header.cwd` 是不可变的
+  原始项目目录；命令真正执行的目录是 `workingDirectory` 投影——`working_directory { cd }`
+  工具与调用自带的 `workdir` 参数改的都是它。相对脚本路径现在会按这个投影、按参数树里
+  递归找到的每个 `workdir` / `cwd` / `directory`、以及命令文本中**引号外**出现的每个
+  字面量 `cd` / `Set-Location` / `Push-Location` 目标逐个解析，所有候选都读。
+  不跟（写进 Known limits）：变量拼路径、`pwsh -Command` / `cmd /c` 子壳里再嵌一层的
+  `cd`、以及 `Start-Process -WorkingDirectory`。
 - **显式解释器的无扩展名目标也要查**：`bash ./payload`、`sh /opt/run` 这类没有已知
   扩展名的目标，只要形如路径（含 `/` `\` 或以 `.` 开头）就读进去检查。
 
@@ -366,15 +369,15 @@ dsh plugin add dsh-subagent-guard
 ## 测试
 
 ```bash
-npm test   # 六个套件，146 条用例，全部脱离宿主
+npm test   # 六个套件，154 条用例，全部脱离宿主
 ```
 
 | 套件 | 条数 | 覆盖面 |
 |---|---|---|
 | `guard.test.mjs` | 19 | 规则层：正则、命令归一化、脚本路径（含引号内分隔符与 `cmd /c` 子命令）、深度、档位强弱 |
-| `policy.test.mjs` | 21 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
-| `apply.test.mjs` | 32 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
-| `delegate.test.mjs` | 54 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
+| `policy.test.mjs` | 22 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
+| `apply.test.mjs` | 36 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
+| `delegate.test.mjs` | 57 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
 | `regressions.test.mjs` | 10 | YAML 引号、pending 清理、上限交集 |
 | `audit-20261028.test.mjs` | 10 | 审计发现里凡能脱离宿主钉住的部分 |
 

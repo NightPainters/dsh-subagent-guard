@@ -109,12 +109,16 @@ and runs the same rules against the file contents.
   against the child session's `cwd`, then the process cwd, then as given; any candidate that
   matches a rule denies the call. Previously the first readable file won, so a same-named
   file in the process cwd could shadow the one that actually runs.
-- **The executing directory comes from the call, not just the session** (0.5.2): a relative
-  script path is also resolved against the tool's `workdir` / `cwd` / `directory` argument
-  and against any literal `cd` / `Set-Location` / `Push-Location` target in the command
-  text. Resolving only against the session cwd meant a same-named script in the `workdir`
-  directory was executed without ever being read — reproduced on a real host with
-  `cd <dir>; pwsh -File x.ps1`.
+- **The executing directory comes from the session's working-directory projection** (0.5.2):
+  `session.header.cwd` is the immutable original project directory; the directory a command
+  actually runs in is the `workingDirectory` projection, which the `working_directory { cd }`
+  tool and a call's own `workdir` argument both change. A relative script path is now resolved
+  against that projection, against every `workdir` / `cwd` / `directory` value found in the
+  arguments (recursively), and against every literal `cd` / `Set-Location` /
+  `Push-Location` target that appears **outside quotes** in the command text. Every candidate
+  is read. Not followed, and documented as known limits: paths built from variables, a `cd`
+  nested inside a `pwsh -Command` / `cmd /c` sub-shell, and
+  `Start-Process -WorkingDirectory`.
 - **Extension-less targets of explicit interpreters are inspected**: `bash ./payload`,
   `sh /opt/run` — any path-shaped target (contains `/`, `\`, or starts with `.`) is read.
 
@@ -434,15 +438,15 @@ the package happens to be resolvable.
 ## Tests
 
 ```bash
-npm test   # six suites, 146 cases, no host required
+npm test   # six suites, 154 cases, no host required
 ```
 
 | suite | cases | covers |
 |---|---|---|
 | `guard.test.mjs` | 19 | rules layer: regex, command normalization, script paths (incl. quoted separators and `cmd /c` sub-commands), depth, mode ranking |
-| `policy.test.mjs` | 21 | delegation policy: caps, derived-tool rejection, sections, pending queue |
-| `apply.test.mjs` | 32 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
-| `delegate.test.mjs` | 54 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
+| `policy.test.mjs` | 22 | delegation policy: caps, derived-tool rejection, sections, pending queue |
+| `apply.test.mjs` | 36 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
+| `delegate.test.mjs` | 57 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
 | `regressions.test.mjs` | 10 | YAML quoting, pending cleanup, cap intersection |
 | `audit-20261028.test.mjs` | 10 | every audit finding that can be pinned host-free |
 

@@ -50,14 +50,31 @@ the message was simply lying.**
   `冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」`.
 
 - **Script inspection followed the session cwd, not the directory the command runs in.** A
-  relative script path was resolved against the child session's `cwd` only, while the host
-  lets a call set `workdir` and a command can `cd` first. A same-named script in that other
-  directory was executed without ever being read — reproduced on a real host: `cd <dir>;
-  pwsh -File x.ps1` ran a script the denylist should have stopped. The resolver now takes the
-  session cwd, the tool's `workdir` / `cwd` / `directory` argument, and literal
-  `cd` / `Set-Location` / `Push-Location` targets in the command text, and reads every
-  candidate. Paths built from variables and the write-then-run TOCTOU window remain out of
-  reach and are documented as known limits.
+  relative script path was resolved against `session.header.cwd` — the immutable original
+  project directory — while the directory a command actually runs in is the `workingDirectory`
+  projection (`working_directory { cd }` and a call's `workdir` both change it). A same-named
+  script there was executed without ever being read; reproduced on a real host with
+  `cd <dir>; pwsh -File x.ps1`. The resolver now takes the projection, every `workdir` /
+  `cwd` / `directory` found recursively in the arguments, and every literal
+  `cd` / `Set-Location` / `Push-Location` target that appears outside quotes in the command
+  text, then reads every candidate. `cd` is parsed with the same quote-aware segmentation as
+  script paths, so a `cd` inside a string argument is not mistaken for a directory change.
+  Paths built from variables, `cd` nested inside `pwsh -Command` / `cmd /c`, and
+  `Start-Process -WorkingDirectory` remain out of reach and are documented as known limits.
+- **A resumed child could claim the policy of an in-flight delegation.** `send_message`
+  wakes an idle child through `agents.resume()`, and the host re-announces it as
+  `agent/created` with `source: 'resume'`. The claim was keyed only on `parentSession`, which
+  the woken child shares with the delegating parent — so it could take the pending policy
+  (re-pinning itself with the new, possibly wider surface) while the real child failed to
+  claim and was cancelled fail-closed. `source: 'resume'` is now never claimed; it only takes
+  the cold-resume rebuild path. Hosts without the `source` field keep the old behaviour.
+- **The derived-channel list missed the plugin's own `delegate`.** `subagent`,
+  `subagent_fork` and `workflow` were rejected as derived channels, but a call could still
+  grant the plugin's own delegate tool (`config.toolName`): with the schema default
+  `enforceMaxTools: false` the child then held the delegation tool and could spawn a
+  grandchild with a wider surface. The configured tool name is now part of both derived lists
+  (the pure policy layer receives it from the caller, so `policy.js` and `index.js` cannot
+  drift apart).
 
 ### Changed
 - **`delegate` is registered inside the `subagents` inject scope, not the plugin's own.** Cordis
@@ -83,7 +100,7 @@ the message was simply lying.**
   therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 146 (19 + 21 + 32 + 54 + 10 + 10).
+- 136 → 154 (19 + 22 + 36 + 57 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 

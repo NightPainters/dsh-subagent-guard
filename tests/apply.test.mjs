@@ -473,6 +473,111 @@ test('F3：workdir 下的脚本干净时照常放行，不误伤', () => {
   }
 })
 
+
+// F3 v2（delta 复审后重写）：解析基准要覆盖三件事 —— ①真正的执行目录是
+// workingDirectory 投影（不是不可变的 session.header.cwd）；②workdir 可能在
+// 嵌套参数里；③cd 只在引号外、且换行也是分隔符。再加一条「引号内的 cd 是字符串，
+// 不许假拒绝」的反向用例。
+test('F3：引号里的 cd 是字符串，不能被当成切目录（不假拒绝）', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    assert.equal(
+      guards[0]({
+        name: 'powershell',
+        arguments: { command: `Write-Output "a; cd ${evilDir}; b"; pwsh -File x.ps1` },
+        agent,
+      }),
+      undefined,
+      '引号内的 cd 只是字符串，真实不会切目录，检查不能被它带偏',
+    )
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：换行分隔的 cd 之后执行的相对脚本要被检查', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `cd "${evilDir}"\npwsh -File x.ps1` },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', '换行分隔的 cd 同样是切目录')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：嵌套参数里的 workdir 也要收集（与 commandOf 同口径递归）', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: 'pwsh -File x.ps1', options: { workdir: evilDir } },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', '嵌套 workdir 同样是执行目录')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：相对脚本按 workingDirectory 投影解析（不是不可变的 header.cwd）', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'guard-work-'))
+  try {
+    writeFileSync(join(workDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    // 真实宿主：exec 目录来自 workingDirectory 投影；header.cwd 是原始项目目录。
+    ctx.get = (name) =>
+      name === 'sandboxPolicy' ? ctx.sandboxPolicy : name === 'workingDirectory' ? { get: () => workDir } : undefined
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({ name: 'pwsh', arguments: { command: 'pwsh -File x.ps1' }, agent })
+    assert.equal(typeof reason, 'string', '投影目录才是真正的执行目录')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
 test('加载期校验：未知档位 / 未知作用域 / 非法正则都响亮失败', () => {
   const { ctx } = makeCtx()
   assert.throws(() => apply(ctx, { ...baseConfig, subagentSandboxCap: 'root' }), /subagentSandboxCap/)

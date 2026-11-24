@@ -155,3 +155,13 @@ test('resolveAllowedTools: 拒绝把派生工具当授权面（subagent / subage
   assert.throws(() => resolveAllowedTools(['subagent_fork'], null), /不能包含派生工具/)
   assert.deepEqual(resolveAllowedTools(['read'], null), ['read'])
 })
+
+// DF-1（2026-11-24 发布关②.5）：插件自己的委派工具（config.toolName）也是派生
+// 通道。名单由调用方传入，两份名单（policy 与 index）保持同源。
+test('DF-1: 实际委派工具名同样按派生通道拒绝', () => {
+  assert.throws(() => resolveAllowedTools(['read', 'delegate'], null, ['delegate']), /不能包含派生工具/)
+  assert.throws(() => resolveAllowedTools(['spawn_child'], null, ['spawn_child']), /不能包含派生工具/)
+  assert.deepEqual(resolveAllowedTools(['read'], null, ['delegate']), ['read'])
+  // 上限路径同样剔除：不传 tools 时 cap 里的委派工具名不能进授权面。
+  assert.deepEqual(resolveAllowedTools(undefined, ['read', 'delegate'], ['delegate']), ['read'])
+})
