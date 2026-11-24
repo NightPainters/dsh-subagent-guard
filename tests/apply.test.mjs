@@ -393,6 +393,86 @@ test('闸二：脚本旁路可关闭', () => {
   }
 })
 
+// F3（2026-11-24 发布关②.5 对抗审计，🔴 真机可达）：脚本内容检查原来只用
+// `session.header.cwd` 解析相对路径，而工具参数 `workdir` 与命令内 `cd` 都会改掉
+// 真正的执行目录 —— 会话目录里放干净的同名脚本、workdir 里放恶意那份，旧实现
+// 检查通过、执行恶意。三条用例：两种改目录的路径都必须被查；干净时不许误伤。
+test('F3：workdir 指向的目录里的同名脚本同样要被检查', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'guard-work-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(workDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: 'pwsh -File x.ps1', workdir: workDir },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', 'workdir 下的恶意脚本不能被跳过')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：命令内 cd 之后执行的相对脚本同样要被检查', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    const reason = guards[0]({
+      name: 'pwsh',
+      arguments: { command: `cd "${evilDir}"; pwsh -File x.ps1` },
+      agent,
+    })
+    assert.equal(typeof reason, 'string', 'cd 之后的相对脚本不能被跳过')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：workdir 下的脚本干净时照常放行，不误伤', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const workDir = mkdtempSync(join(tmpdir(), 'guard-work-'))
+  try {
+    writeFileSync(join(workDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+
+    const { ctx, guards } = makeCtx()
+    apply(ctx, { ...baseConfig, denyPatterns: ['\\bvssadmin\\b'] })
+    const { agent } = makeAgent(1)
+    agent.session.header.cwd = sessionDir
+
+    assert.equal(
+      guards[0]({
+        name: 'pwsh',
+        arguments: { command: 'pwsh -File x.ps1', workdir: workDir },
+        agent,
+      }),
+      undefined,
+      '干净脚本必须放行',
+    )
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(workDir, { recursive: true, force: true })
+  }
+})
+
 test('加载期校验：未知档位 / 未知作用域 / 非法正则都响亮失败', () => {
   const { ctx } = makeCtx()
   assert.throws(() => apply(ctx, { ...baseConfig, subagentSandboxCap: 'root' }), /subagentSandboxCap/)

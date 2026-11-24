@@ -109,11 +109,20 @@ and runs the same rules against the file contents.
   against the child session's `cwd`, then the process cwd, then as given; any candidate that
   matches a rule denies the call. Previously the first readable file won, so a same-named
   file in the process cwd could shadow the one that actually runs.
+- **The executing directory comes from the call, not just the session** (0.5.2): a relative
+  script path is also resolved against the tool's `workdir` / `cwd` / `directory` argument
+  and against any literal `cd` / `Set-Location` / `Push-Location` target in the command
+  text. Resolving only against the session cwd meant a same-named script in the `workdir`
+  directory was executed without ever being read — reproduced on a real host with
+  `cd <dir>; pwsh -File x.ps1`.
 - **Extension-less targets of explicit interpreters are inspected**: `bash ./payload`,
   `sh /opt/run` — any path-shaped target (contains `/`, `\`, or starts with `.`) is read.
 
 If the file cannot be read, the call is **allowed** with a warning — an unreadable path
-normally means a typo, and the script would fail to run anyway. A file that exceeds
+normally means a typo, and the script would fail to run anyway. That is also a known TOCTOU
+boundary: a command that creates the script and runs it in the same line
+(`Copy-Item stage.txt x.ps1; pwsh -File x.ps1`) is inspected before the file exists, so its
+contents are never seen. Paths built at runtime from variables are likewise out of reach. A file that exceeds
 `maxScriptBytes` (256 KiB by default), however, is **refused**: a script whose contents were
 never inspected must not run. Raise the limit if you really need a larger one. Trailing dots
 in the path (`evil.ps1.`, which Windows ignores) are normalized before classification and
@@ -425,14 +434,14 @@ the package happens to be resolvable.
 ## Tests
 
 ```bash
-npm test   # six suites, 143 cases, no host required
+npm test   # six suites, 146 cases, no host required
 ```
 
 | suite | cases | covers |
 |---|---|---|
 | `guard.test.mjs` | 19 | rules layer: regex, command normalization, script paths (incl. quoted separators and `cmd /c` sub-commands), depth, mode ranking |
 | `policy.test.mjs` | 21 | delegation policy: caps, derived-tool rejection, sections, pending queue |
-| `apply.test.mjs` | 29 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
+| `apply.test.mjs` | 32 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
 | `delegate.test.mjs` | 54 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
 | `regressions.test.mjs` | 10 | YAML quoting, pending cleanup, cap intersection |
 | `audit-20261028.test.mjs` | 10 | every audit finding that can be pinned host-free |

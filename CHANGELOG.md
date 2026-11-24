@@ -49,6 +49,16 @@ the message was simply lying.**
   tests: `冷恢复重建的子代理越权调用时，拒绝文案标明「冷恢复重建」` and
   `冷恢复拿不到子代理 ctx 时，拒绝文案标明「冷恢复重建（无 ctx）」`.
 
+- **Script inspection followed the session cwd, not the directory the command runs in.** A
+  relative script path was resolved against the child session's `cwd` only, while the host
+  lets a call set `workdir` and a command can `cd` first. A same-named script in that other
+  directory was executed without ever being read — reproduced on a real host: `cd <dir>;
+  pwsh -File x.ps1` ran a script the denylist should have stopped. The resolver now takes the
+  session cwd, the tool's `workdir` / `cwd` / `directory` argument, and literal
+  `cd` / `Set-Location` / `Push-Location` targets in the command text, and reads every
+  candidate. Paths built from variables and the write-then-run TOCTOU window remain out of
+  reach and are documented as known limits.
+
 ### Changed
 - **`delegate` is registered inside the `subagents` inject scope, not the plugin's own.** Cordis
   attributes an effect to the `ctx` the property was read from, so the old `ctx.effect` put the
@@ -73,7 +83,7 @@ the message was simply lying.**
   therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 143 (19 + 21 + 29 + 54 + 10 + 10).
+- 136 → 146 (19 + 21 + 32 + 54 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 
