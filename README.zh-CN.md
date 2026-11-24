@@ -345,8 +345,9 @@ dsh plugin add dsh-subagent-guard
 
 ## 兼容性
 
-已核对到 `@deepseek-ai/dsh-*` **0.2.1-rc.2**（0.3.3，2026-10-29——闸一闸二在一台真实的
-`danger-full-access` 父会话上验过，闸三在测试台与同一台真机上都验过）。插件**复制**了
+已核对到 `@deepseek-ai/dsh-*` **0.2.2-rc.5**（闸一闸二在一台真实的 `danger-full-access` 父会话上验过，
+闸三在测试台与同一台真机上都验过；2026-10-29 的原始读数取自 0.2.1-rc.2，0.5.2 在 0.2.2-rc.5 上复核——
+那一版把 `parent` / `prompt` / `cwd` 挪到了 `SubagentStartRequest` 顶层，插件两种形状都发，两代宿主都能用）。插件**复制**了
 两小段官方实现，而不是 import 兄弟 `dsh-*` 包——因为 profile 的 `node_modules` 通常只有
 `schemastery`，静态 import 会在加载期解析失败。代价是：如果 DSH 改了 `subagentDepth`、
 `delegationDepth` 或 `sandbox/mode` 事件，这两份副本会**静默失配**。插件会在运行时尝试
@@ -355,7 +356,7 @@ dsh plugin add dsh-subagent-guard
 ## 测试
 
 ```bash
-npm test   # 六个套件，142 条用例，全部脱离宿主
+npm test   # 六个套件，143 条用例，全部脱离宿主
 ```
 
 | 套件 | 条数 | 覆盖面 |
@@ -363,7 +364,7 @@ npm test   # 六个套件，142 条用例，全部脱离宿主
 | `guard.test.mjs` | 19 | 规则层：正则、命令归一化、脚本路径（含引号内分隔符与 `cmd /c` 子命令）、深度、档位强弱 |
 | `policy.test.mjs` | 21 | 委派策略：上限裁剪、派生工具拒绝、段落渲染、待认领队列 |
 | `apply.test.mjs` | 29 | 接线：闸一闸二（假 ctx，含 F-A、R3、R5、BOM、会话 cwd、F-06 未知档位回归） |
-| `delegate.test.mjs` | 53 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
+| `delegate.test.mjs` | 54 | 闸三接线、并发、fail-closed 认领、F-B/R1-01/C1/T1 冷恢复、F1 派生通道过滤、F2 强制串行、F8 窗口 |
 | `regressions.test.mjs` | 10 | YAML 引号、pending 清理、上限交集 |
 | `audit-20261028.test.mjs` | 10 | 审计发现里凡能脱离宿主钉住的部分 |
 

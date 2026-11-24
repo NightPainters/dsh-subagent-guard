@@ -11,6 +11,13 @@ story about who stopped what, and one of them is the kind you investigate for an
 realising the message was simply lying.**
 
 ### Fixed
+- **Delegation failed on hosts ≥ `0.2.2-rc.5`.** `SubagentStartRequest` moved `parent` / `prompt` /
+  `cwd` to the top level of the request (they used to live under `request`), and the guard still
+  sent the old shape, so every `delegate` call died with `Cannot read properties of undefined
+  (reading 'id')` before a child existed. Both shapes are sent now — 0.2.1-rc.2 reads `request`,
+  0.2.2-rc.5 reads the top level, and each host ignores the key it does not know. The suite could
+  not see this because the mock mirrored the old shape; the mock now applies the host's own entry
+  check, and dropping the top-level fields turns 25 tests red.
 - **The delegation receipt reported the request, not the grant.** `runDelegation` returned
   `policy.allowTools` — the caller's own list — and `render()` counted that. With
   `delegate(tools:["read"])` the receipt said "1 tool: read" while the child was actually granted
@@ -55,7 +62,7 @@ realising the message was simply lying.**
   therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 142 (19 + 21 + 29 + 53 + 10 + 10).
+- 136 → 143 (19 + 21 + 29 + 54 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 

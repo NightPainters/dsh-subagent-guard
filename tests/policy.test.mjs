@@ -82,9 +82,12 @@ test('renderSection: persona + 工具清单', () => {
   assert.match(text, /可用工具：read, grep/)
 })
 
-test('renderSection: 空工具集合明确说"无可用工具"', () => {
+test('renderSection: 空工具集合明确说"无可用工具"，并说明 scoped 工具是例外', () => {
   const text = renderSection({ persona: '只读审查。', allowTools: [] })
   assert.match(text, /（无可用工具）/)
+  // 2026-11-24：清单为空 ≠ 一个都调不到——宿主 scoped 的 list_subagent_models 一直在
+  // 授权面里（`SAFE_SCOPED_TOOLS`）。提示词不能只说「没有」，否则就是回执说谎的同一类缺陷。
+  assert.match(text, /list_subagent_models/)
 })
 
 test('renderSection: 没传 tools 时回落到 label，不谎报工具面', () => {

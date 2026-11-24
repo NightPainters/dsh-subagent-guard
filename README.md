@@ -404,9 +404,11 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
 
 ## Compatibility
 
-Verified against `@deepseek-ai/dsh-*` **0.2.1-rc.2** (0.3.3, 2026-10-29 — gates 1 and 2
-checked on a real `danger-full-access` parent, gate 3 on both a test bench and the same
-host). The plugin copies two small helpers instead of importing sibling `dsh-*` packages,
+Verified against `@deepseek-ai/dsh-*` **0.2.2-rc.5** (gates 1 and 2 on a real
+`danger-full-access` parent, gate 3 on both a test bench and the same host; the original
+2026-10-29 readings were taken on 0.2.1-rc.2 and re-checked on 0.2.2-rc.5 for 0.5.2, which moved
+`parent` / `prompt` / `cwd` to the top level of `SubagentStartRequest` — the plugin sends both
+shapes, so either host works). The plugin copies two small helpers instead of importing sibling `dsh-*` packages,
 because a profile's `node_modules` usually contains only `schemastery` and a static import
 would fail at load time. If DSH renames `subagentDepth`, `delegationDepth` or the
 `sandbox/mode` event, these copies fail **silently** — the plugin tries to `import()` the
@@ -416,7 +418,7 @@ the package happens to be resolvable.
 ## Tests
 
 ```bash
-npm test   # six suites, 142 cases, no host required
+npm test   # six suites, 143 cases, no host required
 ```
 
 | suite | cases | covers |
@@ -424,7 +426,7 @@ npm test   # six suites, 142 cases, no host required
 | `guard.test.mjs` | 19 | rules layer: regex, command normalization, script paths (incl. quoted separators and `cmd /c` sub-commands), depth, mode ranking |
 | `policy.test.mjs` | 21 | delegation policy: caps, derived-tool rejection, sections, pending queue |
 | `apply.test.mjs` | 29 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
-| `delegate.test.mjs` | 53 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
+| `delegate.test.mjs` | 54 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
 | `regressions.test.mjs` | 10 | YAML quoting, pending cleanup, cap intersection |
 | `audit-20261028.test.mjs` | 10 | every audit finding that can be pinned host-free |
 

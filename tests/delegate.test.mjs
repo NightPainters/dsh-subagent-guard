@@ -133,6 +133,13 @@ function makeHarness(opts = {}) {
         return providerExists ? { name } : undefined
       },
       async startActivation(spec) {
+        // 复刻宿主 0.2.2-rc.5 的入口判据：它直接读 `spec.parent.id`
+        // （`@deepseek-ai/dsh-subagent/lib/index.js:3024`）。mock 若不照这份契约校验，
+        // 实现把这三个字段挪回嵌套的 `request` 也照样全绿——2026-11-24 就是这样漏掉
+        // 了一次宿主契约漂移（旧 mock 自己从 `request` 里取，与实现一起错）。
+        if (spec?.parent === undefined) {
+          throw new TypeError("Cannot read properties of undefined (reading 'id')")
+        }
         calls.activations.push(spec)
         if (emitCreated) {
           // 宿主在 startActivation 内部同步派发 agent/created（serial + await）。
@@ -251,6 +258,30 @@ test('模型请求在白名单内 ⇒ 原样施加', async () => {
 
   assert.deepEqual(value.tools, ['read', 'grep', 'list_subagent_models'])
   assert.deepEqual(h.calls.restrict, [{ allow: ['read', 'grep'] }])
+})
+
+// 宿主契约（0.2.2-rc.5）：`parent` / `prompt` / `cwd` 在**顶层**。
+// 回退判据：把实现改回只发嵌套 `request`（0.2.1-rc.2 的形状）时，mock 的
+// `startActivation` 会像真宿主一样抛 `reading 'id'`，这条随即变红。
+test('startActivation 按宿主 0.2.2-rc.5 契约把 parent/prompt/cwd 放在顶层', async () => {
+  const h = makeHarness()
+  apply(h.ctx, withDefaults())
+  await callDelegate(h, {
+    description: '只读',
+    prompt: '看看这个仓库',
+    tools: ['read'],
+    cwd: 'D:/work',
+  })
+
+  const spec = h.calls.activations.at(-1)
+  assert.equal(spec.parent.sessionId, 'parent-1', '宿主入口读 spec.parent.id')
+  assert.deepEqual(spec.prompt, [{ type: 'text', text: '看看这个仓库' }])
+  assert.equal(spec.cwd, 'D:/work')
+  assert.equal(spec.delivery, 'parent')
+  assert.equal(typeof spec.signal?.aborted, 'boolean')
+  // 旧宿主（≤0.2.1-rc.2）读嵌套形状：保留同一份引用，两种宿主的读数一致。
+  assert.equal(spec.request.parent, spec.parent)
+  assert.deepEqual(spec.request.prompt, spec.prompt)
 })
 
 test('配置页「工具面拦截」关掉时，tools 被忽略、子代理继承完整面', async () => {
