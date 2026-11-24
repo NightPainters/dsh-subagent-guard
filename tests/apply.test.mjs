@@ -6,7 +6,7 @@
  * 跑法：node tests/apply.test.mjs
  */
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -824,6 +824,53 @@ test('F3：cd 目标后的注释不影响解析', () => {
     const reason = f3Guard(`cd "${evilDir}" # 切到工作目录\npwsh -File x.ps1`, sessionDir)
     assert.equal(typeof reason, 'string')
     assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(sessionDir, { recursive: true, force: true })
+    rmSync(evilDir, { recursive: true, force: true })
+  }
+})
+
+test('F3：cd..（无空格）要被当成 cd ..', () => {
+  const base = mkdtempSync(join(tmpdir(), 'guard-parent-'))
+  const nested = join(base, 'sub')
+  try {
+    mkdirSync(nested, { recursive: true })
+    writeFileSync(join(nested, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(base, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const reason = f3Guard('cd..; pwsh -File x.ps1', nested)
+    assert.equal(typeof reason, 'string', 'cd.. 与 cd .. 等价，指向父目录的恶意脚本必须被读')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('F3：链式相对 cd（cd sub; cd nested）按上一条的结果解析', () => {
+  const base = mkdtempSync(join(tmpdir(), 'guard-chain-'))
+  const nested = join(base, 'sub', 'nested')
+  try {
+    mkdirSync(nested, { recursive: true })
+    writeFileSync(join(base, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(nested, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const reason = f3Guard('cd sub; cd nested; pwsh -File x.ps1', base)
+    assert.equal(typeof reason, 'string', '第二条相对 cd 必须按第一条的结果解析')
+    assert.match(reason, /间接执行的脚本/)
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+  }
+})
+
+test('F3：右括号之后的 cd 是外层命令的参数（不假拒绝）', () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), 'guard-session-'))
+  const evilDir = mkdtempSync(join(tmpdir(), 'guard-evil-'))
+  try {
+    writeFileSync(join(sessionDir, 'x.ps1'), 'Get-Date\n', 'utf8')
+    writeFileSync(join(evilDir, 'x.ps1'), 'vssadmin delete shadows /all /quiet\n', 'utf8')
+
+    const reason = f3Guard(`Write-Host (Get-Date) cd "${evilDir}"; pwsh -File x.ps1`, sessionDir)
+    assert.equal(reason, undefined, '该命令真实执行的是会话目录里的干净脚本，不能被误拒')
   } finally {
     rmSync(sessionDir, { recursive: true, force: true })
     rmSync(evilDir, { recursive: true, force: true })

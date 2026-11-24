@@ -116,10 +116,11 @@ and runs the same rules against the file contents.
   against that projection, against every `workdir` / `cwd` / `directory` value found in the
   arguments (recursively), and against every literal `cd` / `Set-Location` /
   `Push-Location` target the resolver can see — at a statement start, **outside quotes**, and
-  inside `if` / `& { }` / `$( )` blocks. Every enumerated candidate is read; a command whose
-  candidate directories would exceed **32** is refused outright, never partially checked.
-  Not followed (see Known limits): paths built from variables, a `cd` nested inside a
-  `pwsh -Command` / `cmd /c` sub-shell, and `Start-Process -WorkingDirectory`.
+  inside `if` / `& { }` / `$( )` blocks; chained relative targets (`cd sub; cd nested`) and
+  `cd..` are followed. Every enumerated candidate is read; a command whose candidate
+  directories would exceed **32** is refused outright, never partially checked. This resolution
+  is text-level and deliberately incomplete — see Known limits for the forms it does not
+  follow.
 - **Extension-less targets of explicit interpreters are inspected**: `bash ./payload`,
   `sh /opt/run` — any path-shaped target (contains `/`, `\`, or starts with `.`) is read.
 
@@ -326,7 +327,15 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
   statement start or inside an `if` / `& { }` / `$( )` block. A `cd` nested inside a
   `pwsh -Command` / `cmd /c` sub-shell, `Start-Process -WorkingDirectory`, or a path built
   from variables is not followed. More than **32** candidate directories makes the call fail
-  closed instead of being partially checked.
+  closed instead of being partially checked. The budget applies only while
+  `scriptInspection: true` and at least one deny rule is configured — with the inspection off
+  there is no script read at all. The following PowerShell shapes are **not** followed (each can
+  move the executing directory without the resolver noticing, so treat the content check as
+  best-effort): module-qualified cmdlet names (`Microsoft.PowerShell.Management\Set-Location`),
+  colon-bound switches (`-Path:X`) and value-taking switches (`-ErrorAction SilentlyContinue X`),
+  `& 'Set-Location' X`, `$x = cd X`, backtick line continuations, `Set-Location (Get-Item X)`,
+  splatting (`@args`), a `cd` nested inside `pwsh -Command` / `cmd /c`, and
+  `Start-Process -WorkingDirectory`.
 - **`serializeBind: false` is deprecated and ignored (0.4.7).** Policy claiming is FIFO per
   parent session while `agent/created` order belongs to the host; letting two bindings overlap
   let a child claim the other call's policy. Every binding is now serialized. The mutex covers
@@ -446,14 +455,14 @@ the package happens to be resolvable.
 ## Tests
 
 ```bash
-npm test   # six suites, 159 cases, no host required
+npm test   # six suites, 162 cases, no host required
 ```
 
 | suite | cases | covers |
 |---|---|---|
 | `guard.test.mjs` | 19 | rules layer: regex, command normalization, script paths (incl. quoted separators and `cmd /c` sub-commands), depth, mode ranking |
 | `policy.test.mjs` | 22 | delegation policy: caps, derived-tool rejection, sections, pending queue |
-| `apply.test.mjs` | 41 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
+| `apply.test.mjs` | 44 | wiring: gates 1 and 2 against a stub context (incl. F-A, R3, R5, BOM, session-cwd, F-06 unknown-mode regressions) |
 | `delegate.test.mjs` | 57 | gate 3 wiring, concurrency, fail-closed claim, F-B/R1-01/C1/T1 cold resume, F1 derived-channel filter, F2 forced serialization, F8 window |
 | `regressions.test.mjs` | 10 | YAML quoting, pending cleanup, cap intersection |
 | `audit-20261028.test.mjs` | 10 | every audit finding that can be pinned host-free |

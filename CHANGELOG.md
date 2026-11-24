@@ -59,8 +59,10 @@ the message was simply lying.**
   `cd` / `Set-Location` / `Push-Location` target that appears outside quotes in the command
   text, then reads every candidate. `cd` is found by a small lexer (statement start, or
   inside an `if` / `& { }` / `$( )` block; switches and trailing comments are skipped), so a
-  `cd` inside a string argument is not mistaken for a directory change. The candidate list is
-  bounded: a command that would exceed 32 candidate directories is **refused**, never partially
+  `cd` inside a string argument is not mistaken for a directory change. Chained relative
+  targets (`cd sub; cd nested`) and `cd..` are followed too; a `)` no longer starts a new
+  command head, so `Write-Host (Get-Date) cd X` is not mistaken for a directory change. The
+  candidate list is bounded: a command that would exceed 32 candidate directories is **refused**, never partially
   checked — silently truncating the list let a wall of junk `Set-Location` calls push the real
   directory out of the budget. Paths built from variables, `cd` nested inside
   `pwsh -Command` / `cmd /c`, and `Start-Process -WorkingDirectory` remain out of reach and
@@ -104,7 +106,7 @@ the message was simply lying.**
   therefore cannot be used to identify the guard.
 
 ### Tests
-- 136 → 159 (19 + 22 + 41 + 57 + 10 + 10).
+- 136 → 162 (19 + 22 + 44 + 57 + 10 + 10).
 
 ## [0.5.1] — 2026-11-03
 
