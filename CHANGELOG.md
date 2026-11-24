@@ -6,12 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.5.2] — 2026-11-24
 
-**Two reporting defects from `BACKLOG-0.4.8.md` §1/§2. Neither weakens a gate — but both told the
-caller the wrong story about who stopped what, and one of them is the kind you investigate for an
-hour before realising the message was simply lying.**
+**Two reporting defects, neither of which weakens a gate — but both told the caller the wrong
+story about who stopped what, and one of them is the kind you investigate for an hour before
+realising the message was simply lying.**
 
 ### Fixed
-- **The delegation receipt reported the request, not the grant** (§1). `runDelegation` returned
+- **The delegation receipt reported the request, not the grant.** `runDelegation` returned
   `policy.allowTools` — the caller's own list — and `render()` counted that. With
   `delegate(tools:["read"])` the receipt said "1 tool: read" while the child was actually granted
   `read` **plus** the host-scoped `list_subagent_models`. It now returns the granted face
@@ -23,7 +23,7 @@ hour before realising the message was simply lying.**
     explicit path throws at the entry (`delegate 的 tools 不能包含派生工具`). Adding the field
     would require downgrading that throw to a silent strip, which relaxes the security posture and
     needs its own decision.
-- **The tool-face guard always blamed cold recovery** (§2). `pinned` is populated on **two** paths
+- **The tool-face guard always blamed cold recovery.** `pinned` is populated on **two** paths
   (normal delegation, and cold recovery rebuilding it from the session log), but the plugin-level
   guard reported `（delegate 策略，冷恢复兜底）` for both. A freshly delegated child that tripped the
   guard was told cold recovery had stopped it, which sends whoever reads it looking in the wrong

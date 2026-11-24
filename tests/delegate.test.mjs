@@ -308,10 +308,10 @@ test('部署上限含 workflow 且不传 tools ⇒ restrict、段落、guard 三
   assert.match(h.calls.guards[0]({ name: 'workflow' }), /不在该子代理的授权工具面内/)
 })
 
-// §1（2026-11-03）：状态行报的是**授权面**，不是请求面。
+// 状态行报的是**授权面**，不是请求面。
 // 授权面 = 请求面剔除派生通道 ∪ SAFE_SCOPED_TOOLS（后者由宿主 scoped 注册，
 // 调用方点不到，但它确实可调用）。判据：状态行数字 == 执行期守卫允许的工具数。
-test('§1：cap-default 的状态行报授权面数量，不再自称「白名单工具」', async () => {
+test('cap-default 的状态行报授权面数量，不再自称「白名单工具」', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults({ enforceMaxTools: true, maxTools: ['read', 'workflow'] }))
   const value = await callDelegate(h, { description: '只读', prompt: 'x' })
@@ -325,7 +325,7 @@ test('§1：cap-default 的状态行报授权面数量，不再自称「白名�
 // 注：显式传入派生通道不会走到「剔除」这条路——`resolveAllowedTools` 在入口
 // 直接抛错（`delegate 的 tools 不能包含派生工具`）。所以状态行的授权面里
 // 派生通道只可能是「本来就没有」，不需要单列。
-test('§1：显式 tools 的状态行也报授权面（比请求多出 scoped 的那一个）', async () => {
+test('显式 tools 的状态行也报授权面（比请求多出 scoped 的那一个）', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
   const value = await callDelegate(h, { description: '审查', prompt: 'x', tools: ['read'] })
@@ -337,7 +337,7 @@ test('§1：显式 tools 的状态行也报授权面（比请求多出 scoped �
 // 合法反例：只请求 `list_subagent_models` 时，它同时来自请求面与 SAFE_SCOPED_TOOLS。
 // 授权面必须去重（否则状态行报「2 个」、执行期 guard 只允许 1 个），绑定日志也要
 // 与授权面同口径。
-test('§1：请求面与 SAFE_SCOPED_TOOLS 重复时，状态行与绑定日志都按去重后的授权面报数', async () => {
+test('请求面与 SAFE_SCOPED_TOOLS 重复时，状态行与绑定日志都按去重后的授权面报数', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
   const value = await callDelegate(h, {
@@ -357,12 +357,12 @@ test('§1：请求面与 SAFE_SCOPED_TOOLS 重复时，状态行与绑定日志�
   assert.match(bound[1], /工具 1 个/, '绑定日志必须与授权面同口径')
 })
 
-// §1（2026-11-03 复审）：上一条的输入 `['list_subagent_models']` 请求面长度与授权面
+// 上一条的输入 `['list_subagent_models']` 请求面长度与授权面
 // 大小都是 1 —— 把 `grantedCount` 回退成 `policy.allowTools.length` 它仍然会绿，
 // 锁不住「绑定日志按授权面报数」这个口径。改用 `['read']`：请求 1 个，授权 2 个
 // （read + 宿主 scoped 的 list_subagent_models）。回退后绑定日志会变成「1 个」，
 // 本条因此变红；状态行由返回的 granted 面单独计算（锁它的是上一条）。
-test('§1：请求面只有 read 时，状态行与绑定日志都报授权面的 2 个工具', async () => {
+test('请求面只有 read 时，状态行与绑定日志都报授权面的 2 个工具', async () => {
   const h = makeHarness()
   apply(h.ctx, withDefaults())
   const value = await callDelegate(h, { description: '只读', prompt: 'x', tools: ['read'] })
@@ -708,8 +708,8 @@ test('正常派发的子代理越权调 subagent 时，插件 ctx 上的全局 g
   // 闸二的黑名单 guard 也注册在插件 ctx 上，所以按"它是否拦 subagent"来认人，
   // 不按数组下标 —— 下标会随闸二是否启用、注册顺序变化而漂移。
   //
-  // 2026-11-03（BACKLOG §2）：来源文案已分流。这条用例走的是**正常派发**、不是
-  // 冷恢复，所以拒绝消息标「同进程绑定」。判据因此不靠来源词认人。
+  // 0.5.2 起来源文案已分流：这条用例走的是**正常派发**、不是冷恢复，所以拒绝
+  // 消息标「同进程绑定」。判据因此不靠来源词认人。
   const bail = h.calls.globalGuards.find((fn) => {
     const verdict = fn({ name: 'subagent', agent: { sessionId: value.subagentId } })
     return typeof verdict === 'string' && verdict.includes('不在该子代理的授权工具面内')
@@ -728,7 +728,7 @@ test('正常派发的子代理越权调 subagent 时，插件 ctx 上的全局 g
   )
   // 越权工具：这一层拒绝。
   const denied = bail({ name: 'subagent', agent: { sessionId: value.subagentId } })
-  assert.match(denied, /同进程绑定/) // 正常派发路径的来源标记（BACKLOG §2）
+  assert.match(denied, /同进程绑定/) // 正常派发路径的来源标记
   assert.match(denied, /不在该子代理的授权工具面内/)
 })
 
