@@ -380,7 +380,7 @@ If you cannot upgrade yet, keep `enforceMaxTools: false` and pass no `tools` to
 - **Gate 2 cannot see dynamically built commands.** String concatenation, base64 /
   `-EncodedCommand`, variable paths, extension-less interpreter targets that do not look like
   paths, `node -e`, and scripts that run other scripts are outside static matching — an
-  explicit boundary, confirmed by the 2026-10-31 heterogeneous red teams (A2/A5/A7).
+  explicit boundary, confirmed independently on 2026-10-31 (three separate checks — A2, A5, A7).
 - **Gate 2 also blocks the auditor itself.** Read-only queries such as `Get-Help shutdown` are
   unaffected, but audit scripts that actually run sensitive commands are refused. That is by
   design; an exemption would itself be a bypass surface.
@@ -432,8 +432,8 @@ npm test   # six suites, 142 cases, no host required
 - [2026-10-24 — subagent guard coverage audit](./docs/research/2026-10-24-external-audit.md):
   five gaps found by a user on a real deployment, with maintainer responses and the
   fixes that landed in 0.2.0.
-- **2026-10-28 — internal adversarial audit (three red-team paths, 8 planted canaries,
-  recall 8/8).** Twenty-two findings across five categories (silent no-ops, receipts that
+- **2026-10-28 — pre-release adversarial audit (three independent passes, 8 deliberately
+  planted defects, all 8 recovered).** Twenty-two findings across five categories (silent no-ops, receipts that
   lie, boundary flips, half-fixes, gates with missing upper layers). Fixes landed in 0.3.1
   and 0.3.2; 0.3.3 came from the test bench, which caught a regression introduced by the
   0.3.1 fix itself. Records live in the private maintainer workspace, not in this repo.
